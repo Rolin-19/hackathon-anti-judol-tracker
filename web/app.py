@@ -10,6 +10,9 @@ import io
 import json
 import os
 import sys
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -30,7 +33,11 @@ from canonicalizer.rules import (
     STATUSES,
     MAX_LEN,
 )
-from osint.crtsh import collect_subdomains, fetch_subdomains as ambil_subdomain
+from osint.crtsh import (
+    collect_subdomains,
+    fetch_subdomains as ambil_subdomain,
+    siapkan_query,
+)
 
 DATA_FILE = ROOT / "data" / "submissions.json"
 BACKUP_DIR = ROOT / "data" / "backups"
@@ -41,6 +48,33 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+# Cache singkat supaya pengetikan ulang tidak memukul crt.sh berkali-kali.
+CACHE_TTL = 300           # hasil sukses: 5 menit
+CACHE_TTL_GAGAL = 30      # hasil gagal: 30 detik
+CACHE_MAKS = 50
+_CACHE_CRTSH: "OrderedDict[str, tuple]" = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+
+
+def _cache_baca(kunci: str):
+    with _CACHE_LOCK:
+        item = _CACHE_CRTSH.get(kunci)
+        if item is None:
+            return None
+        if item[0] < time.monotonic():
+            _CACHE_CRTSH.pop(kunci, None)
+            return None
+        _CACHE_CRTSH.move_to_end(kunci)
+        return item[1]
+
+
+def _cache_tulis(kunci: str, nilai: dict, ttl: int) -> None:
+    with _CACHE_LOCK:
+        _CACHE_CRTSH[kunci] = (time.monotonic() + ttl, nilai)
+        _CACHE_CRTSH.move_to_end(kunci)
+        while len(_CACHE_CRTSH) > CACHE_MAKS:
+            _CACHE_CRTSH.popitem(last=False)
 
 
 def now_wib() -> str:
@@ -328,14 +362,89 @@ def check_alive(urls: List[str]) -> List[dict]:
 
 # -- OSINT crt.sh -----------------------------------------------------------
 
-def fetch_subdomains(domain: str) -> dict:
-    """Bungkus pengambilan crt.sh untuk dipakai endpoint lama."""
-    hasil = ambil_subdomain(domain, timeout=12, retries=2, delay=0.4)
+def fetch_subdomains(query: str) -> dict:
+    """
+    Cari crt.sh untuk satu input live.
+
+    Input dibedakan otomatis antara domain induk dan kata kunci, diproteksi
+    guardrail placeholder, memakai cache singkat, lalu tiap canonical_key
+    ditandai baru atau sudah ada di tracker.
+    """
+    teks = (query or "").strip()
+    mode, query_crtsh, pesan_error = siapkan_query(
+        teks, tolak_placeholder=True
+    )
+    dasar = {
+        "ok": False,
+        "error": pesan_error,
+        "domain": teks,
+        "query": teks,
+        "mode": mode,
+        "query_crtsh": query_crtsh,
+        "subdomains": [],
+        "baru": [],
+        "sudah_ada": [],
+        "detail": [],
+        "dari_cache": False,
+        "cache_ttl_detik": CACHE_TTL,
+    }
+    if not query_crtsh:
+        return dasar
+
+    kunci = teks.lower().rstrip(".")
+    temuan = _cache_baca(kunci)
+    dari_cache = temuan is not None
+    if dari_cache:
+        # Cache hanya menyimpan jawaban crt.sh. Status Baru/Sudah Ada tetap
+        # dihitung ulang supaya hasil impor langsung tercermin.
+        hasil_mentah = temuan
+    else:
+        hasil_mentah = ambil_subdomain(
+            teks,
+            timeout=8,
+            retries=1,
+            delay=0.2,
+            tolak_placeholder=True,
+        )
+        ttl_mentah = CACHE_TTL if hasil_mentah["ok"] else CACHE_TTL_GAGAL
+        _cache_tulis(kunci, {
+            "ok": hasil_mentah["ok"],
+            "error": hasil_mentah["error"],
+            "subdomains": hasil_mentah["subdomains"],
+        }, ttl_mentah)
+
+    tracker = SoloTracker(DATA_FILE)
+    detail: List[dict] = []
+    baru: List[str] = []
+    sudah: List[str] = []
+
+    for key in hasil_mentah["subdomains"]:
+        r = evaluate(key)
+        ada = key in tracker.entries
+        penanda = (
+            "Sudah Ada di Tracker" if ada else "Baru (Siap Masuk Antrean)"
+        )
+        detail.append({
+            "canonical_key": key,
+            "submit_url": r.submit_url if r.valid else "https://" + key,
+            "status": penanda,
+        })
+        (sudah if ada else baru).append(key)
+
+    ttl = CACHE_TTL if hasil_mentah["ok"] else CACHE_TTL_GAGAL
     return {
-        "domain": (domain or "").strip(),
-        "subdomains": hasil["subdomains"],
-        "ok": hasil["ok"],
-        "error": hasil["error"],
+        "ok": hasil_mentah["ok"],
+        "error": hasil_mentah["error"],
+        "domain": teks,
+        "query": teks,
+        "mode": mode,
+        "query_crtsh": query_crtsh,
+        "subdomains": hasil_mentah["subdomains"],
+        "baru": baru,
+        "sudah_ada": sudah,
+        "detail": detail,
+        "dari_cache": dari_cache,
+        "cache_ttl_detik": ttl,
     }
 
 
@@ -473,7 +582,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/subdomains":
             qs = parse_qs(parsed.query)
-            domain = (qs.get("domain") or [""])[0]
+            domain = (qs.get("q") or qs.get("domain") or [""])[0]
             hasil = fetch_subdomains(domain)
             # Error disampaikan sebagai field, bukan HTTP 500, supaya antarmuka
             # bisa menampilkan pesan yang jelas tanpa memutus alur kerja.

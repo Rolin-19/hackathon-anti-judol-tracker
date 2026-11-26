@@ -75,11 +75,16 @@
 
             <label class="field-label" for="osint-single">Satu domain / kata kunci</label>
             <div class="inline">
-              <input type="text" id="osint-single" spellcheck="false" placeholder="tokobudi.id">
-              <button type="button" id="osint-single-btn" class="btn primary">Cari</button>
+              <input type="text" id="osint-single" spellcheck="false" placeholder="target.id atau slot88">
+              <button type="button" id="osint-single-btn" class="btn primary">Cari Sekarang</button>
             </div>
+            <p class="hint">Cari otomatis setelah jeda 900 ms · minimal 4 karakter</p>
+            <label class="check-line">
+              <input type="checkbox" id="osint-auto-import">
+              Otomatis masukkan kandidat baru ke Siap Submit
+            </label>
             <p id="osint-single-status" class="note"></p>
-            <div id="osint-single-list" class="chips"></div>
+            <div id="osint-single-list" class="rows"></div>
 
             <div class="rule"></div>
 
@@ -94,7 +99,7 @@
             <div id="osint-batch-list" class="chips"></div>
 
             <div class="actions import-row">
-              <button type="button" id="osint-import-btn" class="btn primary" disabled>Masukkan Kandidat ke Antrean</button>
+              <button type="button" id="osint-import-btn" class="btn primary" disabled>Impor Semua Baru ke Antrean</button>
             </div>
           </div>
         </div>

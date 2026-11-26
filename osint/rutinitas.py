@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from canonicalizer.rules import evaluate
-from osint.crtsh import collect_subdomains
+from osint.crtsh import collect_subdomains, adalah_placeholder
 from web.app import USER_AGENT, WIB, SoloTracker
 
 
@@ -73,30 +73,6 @@ def baca_benih(path: Path, contoh: Optional[Path] = None) -> Tuple[List[str], st
         terlihat.add(value)
         hasil.append(value)
     return hasil, catatan
-
-
-# Domain contoh yang tidak boleh dibuang ke crt.sh.
-PLACEHOLDER_AWALAN = (
-    "contoh-",
-    "domain-contoh-",
-    "mirror-utama-",
-    "mirror-pivot-",
-    "portal-cadangan-",
-)
-PLACEHOLDER_PERSIS = {"example.com", "tokobudi.id"}
-
-
-def adalah_placeholder(benih: str) -> bool:
-    """Kenali domain contoh supaya tidak membuang request ke crt.sh."""
-    nilai = str(benih).strip().lower()
-    if not nilai:
-        return True
-    host = nilai.split("/", 1)[0].split(":", 1)[0]
-    if host.startswith("www."):
-        host = host[4:]
-    if host in PLACEHOLDER_PERSIS:
-        return True
-    return any(host.startswith(awalan) for awalan in PLACEHOLDER_AWALAN)
 
 
 def pilih_benih(benih: Iterable[str]) -> Tuple[List[str], List[str]]:

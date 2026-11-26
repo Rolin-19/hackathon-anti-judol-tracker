@@ -12,7 +12,7 @@ Prinsip:
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -34,21 +34,64 @@ class OsintError(Exception):
     """Kesalahan jaringan atau format data dari crt.sh."""
 
 
-def build_query(seed: str) -> str:
-    """
-    Bentuk query crt.sh dari sebuah benih.
+# Domain contoh yang tidak boleh dikirim ke crt.sh, termasuk untuk live search.
+PLACEHOLDER_AWALAN = (
+    "contoh-",
+    "domain-contoh-",
+    "mirror-utama-",
+    "mirror-pivot-",
+    "portal-cadangan-",
+)
+PLACEHOLDER_PERSIS = {
+    "tokobudi",
+    "tokobudi.id",
+    "example.com",
+    "example.org",
+    "example.net",
+}
 
-    Benih berupa domain sah dipakai sebagai pencarian subdomain: `%.domain`.
-    Benih berupa kata kunci dipakai sebagai pencarian teks: `%kata%`.
+
+def adalah_placeholder(benih: str) -> bool:
+    """Kenali domain/kata kunci contoh supaya tidak membuang request."""
+    nilai = str(benih).strip().lower().rstrip(".")
+    if not nilai:
+        return True
+    host = nilai.split("/", 1)[0].split(":", 1)[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if host in PLACEHOLDER_PERSIS:
+        return True
+    return any(host.startswith(awalan) for awalan in PLACEHOLDER_AWALAN)
+
+
+def siapkan_query(
+    seed: str, *, tolak_placeholder: bool = False
+) -> Tuple[str, str, str]:
+    """
+    Tentukan mode pencarian dan query crt.sh.
+
+    Mengembalikan `(mode, query, pesan_error)`.
+    - `domain`: input mengandung titik dan sah -> `%.domain`.
+    - `kata_kunci`: input tanpa titik, minimal 4 karakter -> `%kata%`.
     """
     value = (seed or "").strip().lower().rstrip(".")
     if not value:
-        return ""
+        return "", "", "Benih kosong atau tidak sah"
+    if tolak_placeholder and adalah_placeholder(value):
+        return "", "", "Benih contoh tidak diproses; gunakan domain atau kata kunci asli"
 
     checked = evaluate(value)
     if checked.valid:
-        return "%." + checked.canonical_key
-    return "%" + value[:120] + "%"
+        return "domain", "%." + checked.canonical_key, ""
+
+    if len(value) < 4:
+        return "", "", "Kata kunci minimal 4 karakter"
+    return "kata_kunci", "%" + value[:120] + "%", ""
+
+
+def build_query(seed: str) -> str:
+    """Bentuk query crt.sh dari sebuah benih (kompatibel dengan pemanggil lama)."""
+    return siapkan_query(seed)[1]
 
 
 def parse_crtsh_payload(payload) -> List[str]:
@@ -117,19 +160,23 @@ def fetch_subdomains(
     delay: float = 0.4,
     fetcher: Optional[Callable[[str, int], object]] = None,
     sleeper: Optional[Callable[[float], None]] = None,
+    tolak_placeholder: bool = False,
 ) -> Dict[str, object]:
     """
     Ambil kandidat subdomain untuk satu benih.
 
     Mengembalikan dictionary, bukan melempar error ke pemanggil:
         {
-          "seed": ..., "query": ..., "ok": bool,
-          "subdomains": [...], "error": "" | pesan bahasa Indonesia
+          "seed": ..., "mode": "domain"|"kata_kunci"|"", "query": ...,
+          "ok": bool, "subdomains": [...], "error": "" | pesan bahasa Indonesia
         }
     """
-    query = build_query(seed)
+    mode, query, pesan_error = siapkan_query(
+        seed, tolak_placeholder=tolak_placeholder
+    )
     result: Dict[str, object] = {
         "seed": (seed or "").strip(),
+        "mode": mode,
         "query": query,
         "ok": False,
         "subdomains": [],
@@ -137,7 +184,7 @@ def fetch_subdomains(
     }
 
     if not query:
-        result["error"] = "Benih kosong atau tidak sah"
+        result["error"] = pesan_error or "Benih kosong atau tidak sah"
         return result
 
     ambil = fetcher or default_fetcher
@@ -179,6 +226,7 @@ def collect_subdomains(
     delay: float = 0.4,
     fetcher: Optional[Callable[[str, int], object]] = None,
     sleeper: Optional[Callable[[float], None]] = None,
+    tolak_placeholder: bool = False,
 ) -> Dict[str, object]:
     """
     Jalankan pencarian untuk banyak benih, lalu gabungkan kandidat unik.
@@ -201,9 +249,11 @@ def collect_subdomains(
             delay=delay,
             fetcher=fetcher,
             sleeper=sleeper,
+            tolak_placeholder=tolak_placeholder,
         )
         results.append({
             "seed": hasil["seed"],
+            "mode": hasil["mode"],
             "query": hasil["query"],
             "ok": hasil["ok"],
             "count": len(hasil["subdomains"]),

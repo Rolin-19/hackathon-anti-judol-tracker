@@ -12,10 +12,12 @@ if str(ROOT) not in sys.path:
 
 from osint.crtsh import (
     OsintError,
+    adalah_placeholder,
     build_query,
     collect_subdomains,
     fetch_subdomains,
     parse_crtsh_payload,
+    siapkan_query,
 )
 
 
@@ -28,6 +30,43 @@ class TestBuildQuery(unittest.TestCase):
 
     def test_kosong(self):
         self.assertEqual(build_query("   "), "")
+
+
+class TestSiapkanQuery(unittest.TestCase):
+    def test_domain_induk_memakai_wildcard_subdomain(self):
+        mode, query, error = siapkan_query("target.id")
+        self.assertEqual((mode, query, error), ("domain", "%.target.id", ""))
+
+    def test_url_www_diturunkan_ke_domain_induk(self):
+        mode, query, error = siapkan_query("https://www.Target.ID/")
+        self.assertEqual((mode, query, error), ("domain", "%.target.id", ""))
+
+    def test_kata_kunci_memakai_wildcard_teks(self):
+        mode, query, error = siapkan_query("slot88")
+        self.assertEqual((mode, query, error), ("kata_kunci", "%slot88%", ""))
+
+    def test_kata_kunci_kurang_dari_empat_karakter_ditolak(self):
+        mode, query, error = siapkan_query("abc")
+        self.assertEqual((mode, query, error), ("", "", "Kata kunci minimal 4 karakter"))
+
+    def test_kosong_ditolak(self):
+        mode, query, error = siapkan_query("   ")
+        self.assertEqual((mode, query, error), ("", "", "Benih kosong atau tidak sah"))
+
+    def test_placeholder_ditolak_pada_live_search(self):
+        pesan = "Benih contoh tidak diproses; gunakan domain atau kata kunci asli"
+        for benih in ("tokobudi", "tokobudi.id", "example.com", "contoh-01.com"):
+            with self.subTest(benih=benih):
+                self.assertTrue(adalah_placeholder(benih))
+                self.assertEqual(
+                    siapkan_query(benih, tolak_placeholder=True),
+                    ("", "", pesan),
+                )
+
+    def test_placeholder_masih_diterima_mode_lama(self):
+        self.assertEqual(
+            siapkan_query("tokobudi.id"), ("domain", "%.tokobudi.id", "")
+        )
 
 
 class TestParsingRespons(unittest.TestCase):
@@ -71,6 +110,40 @@ class TestPengambilanData(unittest.TestCase):
         self.assertTrue(hasil["ok"])
         self.assertEqual(hasil["subdomains"], ["m.tokobudi.id", "tokobudi.id"])
         self.assertEqual(hasil["error"], "")
+        self.assertEqual(hasil["mode"], "domain")
+
+    def test_kata_kunci_memakai_url_query_teks(self):
+        url_dipanggil = []
+
+        def fetcher(url, timeout):
+            url_dipanggil.append(url)
+            return [{"name_value": "slot88.id"}]
+
+        hasil = fetch_subdomains("slot88", fetcher=fetcher, sleeper=lambda _: None)
+        self.assertTrue(hasil["ok"])
+        self.assertEqual(hasil["mode"], "kata_kunci")
+        self.assertIn("q=%25slot88%25", url_dipanggil[0])
+        self.assertEqual(hasil["subdomains"], ["slot88.id"])
+
+    def test_placeholder_tidak_memanggil_fetcher(self):
+        dipanggil = []
+
+        def fetcher(url, timeout):
+            dipanggil.append(url)
+            return []
+
+        hasil = fetch_subdomains(
+            "tokobudi.id",
+            fetcher=fetcher,
+            sleeper=lambda _: None,
+            tolak_placeholder=True,
+        )
+        self.assertFalse(hasil["ok"])
+        self.assertEqual(
+            hasil["error"],
+            "Benih contoh tidak diproses; gunakan domain atau kata kunci asli",
+        )
+        self.assertEqual(dipanggil, [])
 
     def test_timeout_dilaporkan_bahasa_indonesia(self):
         def fetcher(url, timeout):

@@ -22,6 +22,9 @@ const STATUS_KELAS = {
 let entri = [];
 let kandidatOsint = [];
 let aliveMap = {};
+let liveTimer = null;
+let liveController = null;
+let liveNomor = 0;
 
 /* ---------- dasar ---------- */
 async function api(url, opsi = {}) {
@@ -257,35 +260,116 @@ async function prosesBulk() {
 }
 
 /* ---------- OSINT pasif ---------- */
-function tampilkanKandidat(daftar) {
+function setKandidat(daftar) {
   kandidatOsint = daftar;
+  $('osint-import-btn').disabled = daftar.length === 0;
+}
+
+function tampilkanKandidat(daftar) {
   $('osint-batch-list').innerHTML = daftar.length
     ? daftar.map((s) => `<span class="chip">${esc(s)}</span>`).join('')
     : '';
-  $('osint-import-btn').disabled = daftar.length === 0 || $('view-work').classList.contains('hidden');
+  setKandidat(daftar);
+}
+
+function statusLive(teks) {
+  $('osint-single-status').textContent = teks || '';
+}
+
+function pesanLive(error) {
+  const teks = String(error || '');
+  if (/timed out|Koneksi ke crt\.sh|HTTP 5\d\d|Permintaan ke crt\.sh|Failed to fetch/i.test(teks)) {
+    return 'crt.sh sedang sibuk. Coba lagi sebentar.';
+  }
+  return teks || 'Pencarian gagal.';
+}
+
+function renderDetailLive(detail) {
+  if (!detail.length) {
+    $('osint-single-list').innerHTML = '<div class="row-empty">Tidak ada kandidat tercatat.</div>';
+    return;
+  }
+  $('osint-single-list').innerHTML = detail.map((d) => {
+    const baru = d.status === 'Baru (Siap Masuk Antrean)';
+    return `<div class="row"><span class="key">${esc(d.canonical_key)}</span><span class="${baru ? 'key' : 'why'}">${esc(d.status)}</span></div>`;
+  }).join('');
+}
+
+function jadwalCariLive() {
+  clearTimeout(liveTimer);
+  if (liveController) liveController.abort();
+  const teks = $('osint-single').value.trim();
+  if (teks.length < 4) {
+    setKandidat([]);
+    $('osint-single-list').innerHTML = '';
+    statusLive(teks ? 'Minimal 4 karakter untuk kata kunci.' : '');
+    return;
+  }
+  statusLive('Menunggu jeda ketik...');
+  liveTimer = setTimeout(() => cariLive(teks), 900);
+}
+
+async function imporOtomatis(daftar, nomor) {
+  const r = await api('/api/osint/import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls: daftar }),
+  });
+  if (nomor !== liveNomor) return null;
+  await muatEntri();
+  return r.added;
+}
+
+async function cariLive(teks) {
+  clearTimeout(liveTimer);
+  if (liveController) liveController.abort();
+  liveController = new AbortController();
+  const nomor = ++liveNomor;
+  statusLive('Mencari di crt.sh...');
+  try {
+    const r = await api(`/api/subdomains?q=${encodeURIComponent(teks)}`, {
+      signal: liveController.signal,
+    });
+    if (nomor !== liveNomor) return;
+
+    if (!r.ok) {
+      setKandidat([]);
+      $('osint-single-list').innerHTML = '';
+      statusLive(pesanLive(r.error));
+      return;
+    }
+
+    setKandidat(r.baru || []);
+    renderDetailLive(r.detail || []);
+    const cache = r.dari_cache ? ' · cache 5 menit' : '';
+    statusLive(`Ditemukan ${r.baru.length} kandidat baru${cache}.`);
+
+    if ($('osint-auto-import').checked && r.baru.length) {
+      const ditambahkan = await imporOtomatis(r.baru, nomor);
+      if (nomor !== liveNomor || ditambahkan === null) return;
+      renderDetailLive((r.detail || []).map((d) => ({
+        ...d, status: 'Sudah Ada di Tracker',
+      })));
+      setKandidat([]);
+      statusLive(`Ditemukan ${r.baru.length} kandidat baru. Otomatis masuk antrean: ${ditambahkan}.`);
+    }
+  } catch (err) {
+    if (err.name === 'AbortError' || nomor !== liveNomor) return;
+    setKandidat([]);
+    $('osint-single-list').innerHTML = '';
+    statusLive(pesanLive(err.message));
+  }
 }
 
 async function cariSatu() {
-  const domain = $('osint-single').value.trim();
-  if (!domain) return pesan('Isi domain atau kata kunci.', true);
-  pesan(`Mencari catatan sertifikat untuk ${domain}...`);
-  try {
-    const r = await api(`/api/subdomains?domain=${encodeURIComponent(domain)}`);
-    if (!r.ok) {
-      $('osint-single-status').textContent = r.error || 'Pencarian gagal.';
-      $('osint-single-list').innerHTML = '';
-      return pesan(`Gagal: ${r.error}`, true);
-    }
-    $('osint-single-status').textContent = `${r.subdomains.length} kandidat dari ${r.domain}`;
-    $('osint-single-list').innerHTML = r.subdomains.length
-      ? r.subdomains.map((s) => `<span class="chip">${esc(s)}</span>`).join('')
-      : '<span class="hint">Tidak ada subdomain tercatat.</span>';
-    tampilkanKandidat(r.subdomains);
-    pesan(`${r.subdomains.length} kandidat ditemukan.`);
-  } catch (err) {
-    $('osint-single-status').textContent = err.message;
-    pesan(`Gagal: ${err.message}`, true);
+  clearTimeout(liveTimer);
+  const teks = $('osint-single').value.trim();
+  if (teks.length < 4) {
+    setKandidat([]);
+    $('osint-single-list').innerHTML = '';
+    statusLive('Minimal 4 karakter untuk kata kunci.');
+    return;
   }
+  return cariLive(teks);
 }
 
 async function scanBenih() {
@@ -377,7 +461,16 @@ function init() {
 
   $('process-btn').addEventListener('click', prosesBulk);
   $('clear-btn').addEventListener('click', () => { $('bulk-input').value = ''; pesan('Kolom input dikosongkan.'); });
+  $('osint-single').addEventListener('input', jadwalCariLive);
+  $('osint-single').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); cariSatu(); }
+  });
   $('osint-single-btn').addEventListener('click', cariSatu);
+  $('osint-auto-import').addEventListener('change', (e) => {
+    statusLive(e.target.checked
+      ? 'Saklar aktif. Kandidat baru berikutnya akan otomatis masuk antrean.'
+      : 'Saklar dimatikan. Impor tetap manual.');
+  });
   $('osint-batch-btn').addEventListener('click', scanBenih);
   $('osint-import-btn').addEventListener('click', imporKandidat);
   $('load-example-btn').addEventListener('click', muatContoh);

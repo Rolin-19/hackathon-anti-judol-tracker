@@ -137,6 +137,8 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--focus); out
 
 .inline { display: flex; gap: 8px; }
 .inline input { flex: 1; }
+.check-line { display: flex; align-items: center; gap: 7px; margin-top: 8px; color: var(--ink-soft); font-size: 11.5px; }
+.check-line input { flex: 0 0 auto; }
 .actions { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
 .import-row { margin-top: 12px; }
 
