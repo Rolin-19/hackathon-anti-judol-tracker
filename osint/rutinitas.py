@@ -14,6 +14,7 @@ Prinsip keras:
   Valid, Menunggu Penilaian, Duplikat, dan Ditolak.
 - Semua jaringan memakai timeout dan jeda sopan. Penghapusan entri mati hanya
   terjadi bila --prune-dead dipakai, dan hanya pada entri Siap Submit.
+- Benih placeholder contoh dilewati sebelum query crt.sh, dan dihitung di log.
 """
 
 import argparse
@@ -72,6 +73,42 @@ def baca_benih(path: Path, contoh: Optional[Path] = None) -> Tuple[List[str], st
         terlihat.add(value)
         hasil.append(value)
     return hasil, catatan
+
+
+# Domain contoh yang tidak boleh dibuang ke crt.sh.
+PLACEHOLDER_AWALAN = (
+    "contoh-",
+    "domain-contoh-",
+    "mirror-utama-",
+    "mirror-pivot-",
+    "portal-cadangan-",
+)
+PLACEHOLDER_PERSIS = {"example.com", "tokobudi.id"}
+
+
+def adalah_placeholder(benih: str) -> bool:
+    """Kenali domain contoh supaya tidak membuang request ke crt.sh."""
+    nilai = str(benih).strip().lower()
+    if not nilai:
+        return True
+    host = nilai.split("/", 1)[0].split(":", 1)[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if host in PLACEHOLDER_PERSIS:
+        return True
+    return any(host.startswith(awalan) for awalan in PLACEHOLDER_AWALAN)
+
+
+def pilih_benih(benih: Iterable[str]) -> Tuple[List[str], List[str]]:
+    """Pisahkan benih asli dari placeholder contoh."""
+    dipakai: List[str] = []
+    dilewati: List[str] = []
+    for item in benih:
+        if adalah_placeholder(item):
+            dilewati.append(item)
+        else:
+            dipakai.append(item)
+    return dipakai, dilewati
 
 
 def kanon(kandidat) -> Optional[object]:
@@ -279,8 +316,9 @@ def jalankan_siklus(
     waktu = waktu or datetime.now(WIB)
 
     benih, catatan_benih = baca_benih(seeds_path, contoh_path)
+    benih_dipakai, benih_placeholder = pilih_benih(benih)
     panen = collect_subdomains(
-        benih,
+        benih_dipakai,
         timeout=timeout,
         retries=retries,
         delay=delay,
@@ -318,7 +356,8 @@ def jalankan_siklus(
     mati = len(hasil_hidup) - hidup
 
     baris_log = " | ".join([
-        f"benih={len(benih)} sumber={seeds_path.name} "
+        f"benih={len(benih)} dipakai={len(benih_dipakai)} "
+        f"placeholder={len(benih_placeholder)} sumber={seeds_path.name} "
         f"kandidat={panen['total']} gagal_crtsh={panen['error_count']}",
         f"masuk_siap_submit={impor['added']} "
         f"dilewati={impor['skipped_existing']} tidak_sah={impor['invalid']}",
@@ -332,7 +371,10 @@ def jalankan_siklus(
     print("Ringkasan rutinitas solo")
     if catatan_benih:
         print(f"- Catatan: {catatan_benih}")
-    print(f"- Benih diproses: {len(benih)}")
+    print(f"- Benih diproses: {len(benih_dipakai)} dari {len(benih)}")
+    print(f"- Placeholder dilewati: {len(benih_placeholder)} (tanpa query crt.sh)")
+    if benih_placeholder:
+        print(f"- Daftar placeholder: {', '.join(benih_placeholder)}")
     print(f"- Kandidat crt.sh: {panen['total']} (gagal: {panen['error_count']})")
     print(f"- Masuk Siap Submit: {impor['added']}")
     print(f"- Dilewati (sudah ada): {impor['skipped_existing']}")
@@ -348,6 +390,9 @@ def jalankan_siklus(
         "sumber_benih": str(seeds_path),
         "catatan_benih": catatan_benih,
         "benih": len(benih),
+        "benih_dipakai": len(benih_dipakai),
+        "placeholder": len(benih_placeholder),
+        "daftar_placeholder": benih_placeholder,
         "kandidat": panen["total"],
         "gagal_crtsh": panen["error_count"],
         "hasil_panen": panen["results"],

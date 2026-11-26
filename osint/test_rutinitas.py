@@ -11,6 +11,7 @@ import requests
 
 from canonicalizer.rules import evaluate
 from osint.rutinitas import (
+    adalah_placeholder,
     baca_benih,
     buang_mati,
     buat_backup,
@@ -285,6 +286,95 @@ class TestBackup(unittest.TestCase):
             isi = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(isi["summary"]["total_entries"], 1)
             self.assertEqual(isi["exported_at"], "2026-11-26T07:30:00+07:00")
+
+
+class TestGuardrailPlaceholder(unittest.TestCase):
+    def test_placeholder_dilewati_tanpa_query_crtsh(self):
+        placeholder = [
+            "contoh-target-utama.id",
+            "domain-contoh-01.com",
+            "mirror-utama-01.org",
+            "mirror-pivot-02.net",
+            "portal-cadangan-03.biz",
+            "example.com",
+            "tokobudi.id",
+        ]
+        for item in placeholder:
+            with self.subTest(item=item):
+                self.assertTrue(adalah_placeholder(item))
+        self.assertFalse(adalah_placeholder("domain-nyata.id"))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            akar = Path(tmp)
+            seeds = akar / "seeds.txt"
+            seeds.write_text("\n".join(placeholder + ["domain-nyata.id"]), encoding="utf-8")
+            submissions = akar / "submissions.json"
+            tulis_json(submissions, {"mode": "solo", "entries": {}})
+            log = akar / "rutinitas.log"
+            panggilan = []
+
+            def fetcher(url, timeout):
+                panggilan.append(url)
+                return [{"name_value": "api.domain-nyata.id"}]
+
+            ringkasan = jalankan_siklus(
+                seeds,
+                root=akar,
+                submissions=submissions,
+                log=log,
+                backups=akar / "backups",
+                fetcher=fetcher,
+                sleeper=lambda _: None,
+                waktu=WAKTU,
+            )
+
+            self.assertEqual(len(panggilan), 1)
+            self.assertIn("domain-nyata.id", panggilan[0])
+            self.assertEqual(ringkasan["benih"], 8)
+            self.assertEqual(ringkasan["benih_dipakai"], 1)
+            self.assertEqual(ringkasan["placeholder"], 7)
+            self.assertEqual(ringkasan["ditambah"], 1)
+
+            isi_log = log.read_text(encoding="utf-8")
+            self.assertIn("dipakai=1", isi_log)
+            self.assertIn("placeholder=7", isi_log)
+            for item in placeholder:
+                self.assertNotIn(item, isi_log)
+
+    def test_semua_placeholder_tidak_menyentuh_jaringan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            akar = Path(tmp)
+            seeds = akar / "seeds.txt"
+            seeds.write_text(
+                "domain-contoh-01.com\nmirror-pivot-01.org\nexample.com\ntokobudi.id\n",
+                encoding="utf-8",
+            )
+            submissions = akar / "submissions.json"
+            tulis_json(submissions, {"mode": "solo", "entries": {}})
+            log = akar / "rutinitas.log"
+
+            def fetcher(url, timeout):
+                self.fail(f"Placeholder tidak boleh dikirim ke crt.sh: {url}")
+
+            ringkasan = jalankan_siklus(
+                seeds,
+                root=akar,
+                submissions=submissions,
+                log=log,
+                backups=akar / "backups",
+                fetcher=fetcher,
+                sleeper=lambda _: None,
+                waktu=WAKTU,
+            )
+
+            self.assertEqual(ringkasan["benih_dipakai"], 0)
+            self.assertEqual(ringkasan["placeholder"], 4)
+            self.assertEqual(ringkasan["kandidat"], 0)
+            self.assertEqual(ringkasan["gagal_crtsh"], 0)
+            self.assertIn("placeholder=4", log.read_text(encoding="utf-8"))
+            self.assertEqual(
+                json.loads(submissions.read_text(encoding="utf-8"))["entries"], {}
+            )
 
 
 if __name__ == "__main__":
