@@ -1,15 +1,15 @@
-/* Solo Tracker — frontend (tanpa framework). */
+/* Workspace riset solo. Tanpa framework, tanpa dekorasi. */
 
 const $ = (id) => document.getElementById(id);
 
-const SCHEDULE = [
-  { label: 'Tutup Pendaftaran Solo', date: 'Jumat, 4 Des 2026, 00.00 WIB', iso: '2026-12-04T00:00:00+07:00' },
-  { label: 'Mulai Submit', date: 'Sabtu, 5 Des 2026, 00.00 WIB', iso: '2026-12-05T00:00:00+07:00' },
-  { label: 'Tutup Submit', date: 'Kamis, 10 Des 2026, 00.00 WIB', iso: '2026-12-10T00:00:00+07:00' },
-  { label: 'Pengumuman', date: 'Senin, 14 Des 2026, 00.00 WIB', iso: '2026-12-14T00:00:00+07:00' },
+const JADWAL = [
+  { label: 'Tutup pendaftaran', tanggal: 'Jumat, 4 Des 2026, 00.00 WIB', iso: '2026-12-04T00:00:00+07:00' },
+  { label: 'Mulai submit', tanggal: 'Sabtu, 5 Des 2026, 00.00 WIB', iso: '2026-12-05T00:00:00+07:00' },
+  { label: 'Tutup submit', tanggal: 'Kamis, 10 Des 2026, 00.00 WIB', iso: '2026-12-10T00:00:00+07:00' },
+  { label: 'Pengumuman', tanggal: 'Senin, 14 Des 2026, 00.00 WIB', iso: '2026-12-14T00:00:00+07:00' },
 ];
 
-const BADGE = {
+const STATUS_KELAS = {
   'Siap Submit': 'Siap_Submit',
   'Menunggu Penilaian': 'Menunggu_Penilaian',
   'Valid': 'Valid',
@@ -17,41 +17,38 @@ const BADGE = {
   'Ditolak': 'Ditolak',
 };
 
-let entries = [];
-let foundSubdomains = [];
+let entri = [];
+let kandidatOsint = [];
 let aliveMap = {};
 
-/* ---------- util ---------- */
-async function api(url, options = {}) {
-  const res = await fetch(url, options);
+/* ---------- dasar ---------- */
+async function api(url, opsi = {}) {
+  const res = await fetch(url, opsi);
   let data;
   try { data = await res.json(); } catch (_) { data = {}; }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
-function esc(s) {
+function esc(nilai) {
   const d = document.createElement('div');
-  d.textContent = s == null ? '' : String(s);
+  d.textContent = nilai == null ? '' : String(nilai);
   return d.innerHTML;
 }
 
-function toast(msg, isErr = false) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.classList.toggle('err', isErr);
-  el.classList.add('show');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.remove('show'), 2600);
+function pesan(teks, gagal = false) {
+  const bar = $('statusline');
+  bar.textContent = teks;
+  bar.classList.toggle('error', !!gagal);
 }
 
-async function copyText(text) {
+async function salin(teks) {
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(teks);
     return true;
   } catch (_) {
     const ta = document.createElement('textarea');
-    ta.value = text;
+    ta.value = teks;
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
@@ -62,310 +59,330 @@ async function copyText(text) {
   }
 }
 
-function fmtWib(iso) {
-  if (!iso) return '—';
+function waktuWib(iso) {
+  if (!iso) return '-';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('id-ID', {
-    timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric',
+  return new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }) + ' WIB';
+  }).format(d) + ' WIB';
 }
 
-/* ---------- countdown ---------- */
-function renderCountdown() {
-  const now = Date.now();
-  $('countdown').innerHTML = SCHEDULE.map((s) => {
-    const diff = new Date(s.iso).getTime() - now;
-    let time = 'Selesai';
-    let cls = 'is-done';
-    if (diff > 0) {
-      const d = Math.floor(diff / 86400000);
-      const h = Math.floor((diff % 86400000) / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      const sec = Math.floor((diff % 60000) / 1000);
-      time = `${d}h ${String(h).padStart(2, '0')}j ${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}d`;
-      cls = '';
-    } else if (diff > -3600000) {
-      time = 'Baru saja';
-      cls = 'is-live';
+/* ---------- jam dan jadwal ---------- */
+function updateJam() {
+  $('clock').textContent = waktuWib(new Date().toISOString());
+
+  const sekarang = Date.now();
+  JADWAL.forEach((j) => {
+    const el = document.querySelector(`[data-jadwal="${j.iso}"]`);
+    if (!el) return;
+    const sisa = new Date(j.iso).getTime() - sekarang;
+    if (sisa <= 0) {
+      el.textContent = 'terlewat';
+      el.closest('.schedule-item').classList.add('done');
+      return;
     }
-    return `<div class="cd-item ${cls}">
-      <div class="cd-label">${esc(s.label)}</div>
-      <div class="cd-date">${esc(s.date)}</div>
-      <div class="cd-time">${esc(time)}</div>
-    </div>`;
-  }).join('');
-}
-
-/* ---------- stats ---------- */
-async function loadStats() {
-  const s = await api('/api/stats');
-  $('stat-score').textContent = s.total_score ?? 0;
-  $('stat-waiting').textContent = s['Menunggu Penilaian'] ?? 0;
-  $('stat-total').textContent = s.total_entries ?? 0;
-}
-
-/* ---------- bulk cleaner ---------- */
-async function processBulk() {
-  const urls = $('bulk-input').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  if (!urls.length) return toast('Tempel URL terlebih dahulu.', true);
-
-  const btn = $('process-btn');
-  btn.disabled = true;
-  btn.textContent = 'Memproses…';
-  try {
-    const r = await api('/api/process', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls }),
-    });
-
-    $('count-unique').textContent = r.unique_count;
-    $('count-duplicate').textContent = r.duplicate_count;
-    $('count-invalid').textContent = r.invalid_count;
-    $('process-summary').textContent = `${r.total} entri diproses`;
-
-    $('list-unique').innerHTML = r.uniques.length
-      ? r.uniques.map((e) => `<div class="res-item">
-          <div>${esc(e.submit_url)}</div>
-          <div class="key">→ ${esc(e.canonical_key)}</div>
-        </div>`).join('')
-      : '<div class="muted">Tidak ada</div>';
-
-    $('list-duplicate').innerHTML = r.duplicates.length
-      ? r.duplicates.map((e) => `<div class="res-item">
-          <div>${esc(e.raw)}</div>
-          <div class="why">${esc(e.reason)}</div>
-        </div>`).join('')
-      : '<div class="muted">Tidak ada</div>';
-
-    $('list-invalid').innerHTML = r.invalids.length
-      ? r.invalids.map((e) => `<div class="res-item">
-          <div>${esc(e.raw)}</div>
-          <div class="why">${esc(e.reason)}</div>
-        </div>`).join('')
-      : '<div class="muted">Tidak ada</div>';
-
-    toast(`${r.unique_count} unik masuk antrean`);
-    await loadQueue();
-  } catch (err) {
-    toast(err.message, true);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Proses & Masuk Antrean';
-  }
-}
-
-/* ---------- subdomain OSINT ---------- */
-async function searchSubdomains() {
-  const domain = $('domain-input').value.trim();
-  if (!domain) return toast('Masukkan domain induk.', true);
-
-  const btn = $('subdomain-btn');
-  btn.disabled = true;
-  $('subdomain-status').textContent = 'Menghubungi crt.sh…';
-  foundSubdomains = [];
-  $('add-subdomains-btn').disabled = true;
-
-  try {
-    const r = await api(`/api/subdomains?domain=${encodeURIComponent(domain)}`);
-    foundSubdomains = r.subdomains || [];
-    $('subdomain-list').innerHTML = foundSubdomains.length
-      ? foundSubdomains.map((s) => `<span class="chip">${esc(s)}</span>`).join('')
-      : '<span class="muted">Tidak ada subdomain ditemukan.</span>';
-    $('subdomain-status').textContent = `${foundSubdomains.length} subdomain ditemukan`;
-    $('add-subdomains-btn').disabled = foundSubdomains.length === 0;
-  } catch (err) {
-    $('subdomain-status').textContent = err.message;
-    toast(err.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function addSubdomains() {
-  if (!foundSubdomains.length) return;
-  const r = await api('/api/process', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls: foundSubdomains }),
+    const hari = Math.floor(sisa / 86400000);
+    const jam = Math.floor((sisa % 86400000) / 3600000);
+    const menit = Math.floor((sisa % 3600000) / 60000);
+    const detik = Math.floor((sisa % 60000) / 1000);
+    el.textContent = `${hari}h ${String(jam).padStart(2, '0')}j ${String(menit).padStart(2, '0')}m ${String(detik).padStart(2, '0')}d`;
   });
-  toast(`${r.unique_count} subdomain masuk antrean`);
-  foundSubdomains = [];
-  document.querySelectorAll('#subdomain-list .chip').forEach((c) => c.classList.add('checked'));
-  $('add-subdomains-btn').disabled = true;
-  await loadQueue();
 }
 
-/* ---------- queue ---------- */
-async function loadQueue() {
+function renderJadwal() {
+  $('schedule').innerHTML = JADWAL.map((j) => `
+    <div class="schedule-item">
+      <div class="schedule-label">${esc(j.label)}</div>
+      <div class="schedule-date">${esc(j.tanggal)}</div>
+      <div class="schedule-left" data-jadwal="${j.iso}">-</div>
+    </div>
+  `).join('');
+}
+
+/* ---------- angka dan antrean ---------- */
+async function muatAngka() {
+  const s = await api('/api/stats');
+  $('m-score').textContent = s.total_score ?? 0;
+  $('m-waiting').textContent = s['Menunggu Penilaian'] ?? 0;
+  $('m-ready').textContent = s['Siap Submit'] ?? 0;
+  $('m-rejected').textContent = s.Ditolak ?? 0;
+  $('m-duplicate').textContent = s.Duplikat ?? 0;
+}
+
+async function muatEntri() {
   const r = await api('/api/entries');
-  entries = r.entries || [];
-  renderQueue();
-  await loadStats();
+  entri = r.entries || [];
+  renderAntrean();
+  await muatAngka();
 }
 
-function renderQueue() {
+function renderAntrean() {
   const filter = $('status-filter').value;
-  const shown = filter === 'all' ? entries : entries.filter((e) => e.status === filter);
+  const daftar = filter === 'all' ? entri : entri.filter((e) => e.status === filter);
+  const body = $('queue-body');
 
-  if (!shown.length) {
-    $('queue-list').innerHTML = '<div class="empty">Belum ada entri pada filter ini.</div>';
+  if (!daftar.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">Tidak ada entri pada filter ini.</td></tr>';
     return;
   }
 
-  $('queue-list').innerHTML = shown.map((e) => {
+  body.innerHTML = daftar.map((e) => {
+    const k = e.canonical_key;
     const st = e.status;
-    const locked = ['Menunggu Penilaian', 'Valid', 'Duplikat'].includes(st);
-    const badgeCls = BADGE[st] ? BADGE[st].replace(/\s+/g, '_') : 'Siap_Submit';
-    const alive = aliveMap[e.canonical_key];
-    const aliveHtml = alive ? `<span class="alive ${alive.alive ? 'yes' : 'no'}">${esc(alive.label)}</span>` : '';
+    const kelas = STATUS_KELAS[st] ? STATUS_KELAS[st].replace(/\s+/g, '_') : 'Siap_Submit';
+    const hidup = aliveMap[k];
+    const hidupHtml = hidup
+      ? `<div class="alive ${hidup.alive ? 'yes' : 'no'}">${esc(hidup.label)}</div>` : '';
+    let aksi = '';
 
-    let actions = '';
     if (st === 'Siap Submit') {
-      actions = `
-        <button class="btn small ghost" onclick="checkAlive('${esc(e.canonical_key)}')">Cek Hidup</button>
-        <button class="btn small primary" onclick="submitEntry('${esc(e.canonical_key)}')">Salin URL &amp; Tandai Submitted</button>
-        <button class="btn small danger" onclick="setStatus('${esc(e.canonical_key)}','Duplikat')">Tandai Duplikat</button>`;
+      aksi = `
+        <button class="btn" data-action="cek" data-key="${esc(k)}">Cek Hidup</button>
+        <button class="btn primary" data-action="submit" data-key="${esc(k)}">Salin &amp; Tandai Submitted</button>
+        <button class="btn" data-action="status" data-target="Duplikat" data-key="${esc(k)}">Tandai Duplikat</button>`;
     } else if (st === 'Menunggu Penilaian') {
-      actions = `
-        <button class="btn small primary" onclick="setStatus('${esc(e.canonical_key)}','Valid')">Tandai Valid (+1)</button>
-        <button class="btn small danger" onclick="setStatus('${esc(e.canonical_key)}','Duplikat')">Tandai Duplikat</button>
-        <button class="btn small danger" onclick="setStatus('${esc(e.canonical_key)}','Ditolak')">Tolak</button>`;
+      aksi = `
+        <button class="btn primary" data-action="status" data-target="Valid" data-key="${esc(k)}">Tandai Valid</button>
+        <button class="btn" data-action="status" data-target="Duplikat" data-key="${esc(k)}">Tandai Duplikat</button>
+        <button class="btn" data-action="status" data-target="Ditolak" data-key="${esc(k)}">Tolak</button>`;
     } else if (st === 'Ditolak') {
-      actions = `
-        <input type="text" id="reason-${esc(e.canonical_key)}" placeholder="Alasan penolakan" value="${esc(e.reject_reason || '')}">
-        <button class="btn small danger" onclick="setStatus('${esc(e.canonical_key)}','Ditolak',true)">Simpan Alasan</button>
-        <button class="btn small primary" onclick="requeue('${esc(e.canonical_key)}')">Ajukan Ulang / Re-queue</button>`;
-    } else if (st === 'Duplikat') {
-      actions = '<span class="locked">🔒 Terkunci (0 Poin) · tidak ada Re-queue</span>';
-    } else if (st === 'Valid') {
-      actions = '<span class="locked">🔒 Final · +1 Poin</span>';
+      aksi = `
+        <input type="text" data-alasan="${esc(k)}" placeholder="Alasan penolakan" value="${esc(e.reject_reason || '')}">
+        <button class="btn" data-action="alasan" data-key="${esc(k)}">Simpan Alasan</button>
+        <button class="btn primary" data-action="status" data-target="Siap Submit" data-key="${esc(k)}">Ajukan Ulang / Re-queue</button>`;
+    } else {
+      aksi = `<span class="locked">Terkunci permanen${st === 'Valid' ? ' · +1 poin' : ' · 0 poin'}</span>`;
     }
 
-    const reasonHtml = st === 'Ditolak' && e.reject_reason
-      ? `<div class="q-meta"><span class="alive no">Alasan: ${esc(e.reject_reason)}</span></div>` : '';
-
-    return `<div class="q-item">
-      <div class="q-top">
-        <div class="q-url">${esc(e.submit_url)}</div>
-        <span class="badge ${badgeCls}">${esc(st)}</span>
-      </div>
-      <div class="q-key">canonical: ${esc(e.canonical_key)}</div>
-      <div class="q-meta">
-        <span>Skor: <strong>${e.score || 0}</strong></span>
-        <span>Dibuat: ${fmtWib(e.created_at)}</span>
-        ${e.submitted_at ? `<span>Submit: ${fmtWib(e.submitted_at)}</span>` : ''}
-        ${locked ? '<span class="locked">🔒 Terkunci</span>' : ''}
-        ${aliveHtml}
-      </div>
-      ${reasonHtml}
-      <div class="q-actions">${actions}</div>
-    </div>`;
+    return `<tr>
+      <td class="mono">${esc(e.submit_url)}<div class="hint">asal: ${esc(e.raw || '-')}</div></td>
+      <td class="mono">${esc(k)}</td>
+      <td><span class="status ${kelas}">${esc(st)}</span></td>
+      <td class="mono">${waktuWib(e.submitted_at || e.created_at)}</td>
+      <td class="mono score">${e.score || 0}</td>
+      <td><div class="cell-actions">${aksi}${hidupHtml}</div></td>
+    </tr>`;
   }).join('');
 }
 
-async function submitEntry(key) {
+/* ---------- aksi antrean ---------- */
+async function aksiSubmit(key) {
   const r = await api('/api/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ canonical_key: key }),
   });
-  const url = r.entry.submit_url;
-  const ok = await copyText(url);
-  toast(ok ? `Tersalin: ${url} · ${fmtWib(r.entry.submitted_at)}` : `Gagal salin. URL: ${url}`, !ok);
-  await loadQueue();
+  const ok = await salin(r.entry.submit_url);
+  pesan(`${ok ? 'URL tersalin' : 'Salin gagal'}: ${r.entry.submit_url} · ${waktuWib(r.entry.submitted_at)}`, !ok);
+  await muatEntri();
 }
 
-async function setStatus(key, status, withReason = false) {
-  const payload = { canonical_key: key, status };
-  if (withReason) payload.reason = ($(`reason-${key}`) || {}).value || '';
+async function aksiStatus(key, target) {
+  const payload = { canonical_key: key, status: target };
+  if (target === 'Ditolak') {
+    const input = document.querySelector(`[data-alasan="${CSS.escape(key)}"]`);
+    payload.reason = input ? input.value : '';
+  }
   try {
     await api('/api/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (status === 'Valid') toast('Valid · +1 poin');
-    else toast('Status diperbarui');
-    await loadQueue();
-  } catch (err) { toast(err.message, true); }
+    pesan(target === 'Valid' ? 'Status Valid. Skor bertambah 1.' : `Status menjadi ${target}.`);
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
 }
 
-async function requeue(key) {
+async function aksiAlasan(key) {
+  const input = document.querySelector(`[data-alasan="${CSS.escape(key)}"]`);
   try {
     await api('/api/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ canonical_key: key, status: 'Siap Submit', reason: '' }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ canonical_key: key, status: 'Ditolak', reason: input ? input.value : '' }),
     });
-    toast('Dikembalikan ke antrean');
-    await loadQueue();
-  } catch (err) { toast(err.message, true); }
+    pesan('Alasan penolakan tersimpan.');
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
 }
 
-async function checkAlive(key) {
-  const entry = entries.find((e) => e.canonical_key === key);
-  if (!entry) return;
-  toast('Mengecek…');
+async function aksiCek(key) {
+  const e = entri.find((x) => x.canonical_key === key);
+  if (!e) return;
+  pesan(`Mengecek ${e.submit_url}...`);
   try {
     const r = await api('/api/check-alive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls: [entry.submit_url] }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: [e.submit_url] }),
     });
     aliveMap[key] = r.results[0];
-    renderQueue();
-  } catch (err) { toast(err.message, true); }
+    renderAntrean();
+    pesan(`Hasil: ${r.results[0].label}`);
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
 }
 
-/* ---------- backup / restore ---------- */
-async function restoreJson(file) {
-  if (!file) return;
+/* ---------- bulk cleaner ---------- */
+async function prosesBulk() {
+  const urls = $('bulk-input').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (!urls.length) return pesan('Tempel URL atau domain terlebih dahulu.', true);
+
+  pesan(`Memproses ${urls.length} entri...`);
   try {
-    const text = await file.text();
-    const r = await api('/api/import/json', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: text,
+    const r = await api('/api/process', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls }),
     });
-    $('restore-status').textContent = `${r.imported} entri dipulihkan · ${fmtWib(new Date().toISOString())}`;
-    toast(`Restore selesai: ${r.imported} entri`);
-    await loadQueue();
+    $('count-unique').textContent = r.unique_count;
+    $('count-duplicate').textContent = r.duplicate_count;
+    $('count-invalid').textContent = r.invalid_count;
+
+    $('result-unique').innerHTML = r.uniques.length
+      ? r.uniques.map((e) => `<div class="row"><div>${esc(e.submit_url)}</div><div class="key">${esc(e.canonical_key)}</div></div>`).join('')
+      : '<div class="row-empty">Tidak ada</div>';
+    $('result-duplicate').innerHTML = r.duplicates.length
+      ? r.duplicates.map((e) => `<div class="row">${esc(e.raw)}<div class="why">${esc(e.reason)}</div></div>`).join('')
+      : '<div class="row-empty">Tidak ada</div>';
+    $('result-invalid').innerHTML = r.invalids.length
+      ? r.invalids.map((e) => `<div class="row">${esc(e.raw)}<div class="why">${esc(e.reason)}</div></div>`).join('')
+      : '<div class="row-empty">Tidak ada</div>';
+
+    pesan(`${r.unique_count} unik masuk antrean. ${r.duplicate_count} duplikat. ${r.invalid_count} tidak sah.`);
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
+}
+
+/* ---------- OSINT pasif ---------- */
+function tampilkanKandidat(daftar) {
+  kandidatOsint = daftar;
+  $('osint-batch-list').innerHTML = daftar.length
+    ? daftar.map((s) => `<span class="chip">${esc(s)}</span>`).join('')
+    : '';
+  $('osint-import-btn').disabled = daftar.length === 0 || $('view-work').classList.contains('hidden');
+}
+
+async function cariSatu() {
+  const domain = $('osint-single').value.trim();
+  if (!domain) return pesan('Isi domain atau kata kunci.', true);
+  pesan(`Mencari catatan sertifikat untuk ${domain}...`);
+  try {
+    const r = await api(`/api/subdomains?domain=${encodeURIComponent(domain)}`);
+    if (!r.ok) {
+      $('osint-single-status').textContent = r.error || 'Pencarian gagal.';
+      $('osint-single-list').innerHTML = '';
+      return pesan(`Gagal: ${r.error}`, true);
+    }
+    $('osint-single-status').textContent = `${r.subdomains.length} kandidat dari ${r.domain}`;
+    $('osint-single-list').innerHTML = r.subdomains.length
+      ? r.subdomains.map((s) => `<span class="chip">${esc(s)}</span>`).join('')
+      : '<span class="hint">Tidak ada subdomain tercatat.</span>';
+    tampilkanKandidat(r.subdomains);
+    pesan(`${r.subdomains.length} kandidat ditemukan.`);
   } catch (err) {
-    $('restore-status').textContent = err.message;
-    toast(err.message, true);
+    $('osint-single-status').textContent = err.message;
+    pesan(`Gagal: ${err.message}`, true);
   }
 }
 
-/* ---------- init ---------- */
+async function scanBenih() {
+  const seeds = $('seeds-input').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (!seeds.length) return pesan('Isi daftar benih terlebih dahulu.', true);
+  pesan(`Memindai ${seeds.length} benih...`);
+  try {
+    const r = await api('/api/osint/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seeds }),
+    });
+    $('osint-batch-status').textContent = `${r.total} kandidat unik dari ${r.seeds_count} benih. Gagal: ${r.error_count}`;
+    $('osint-batch-results').innerHTML = r.results.map((x) => `
+      <div class="row">${esc(x.seed)}
+        <div class="${x.ok ? 'key' : 'why'}">${x.ok ? `${x.count} kandidat` : `Gagal: ${esc(x.error)}`}</div>
+      </div>
+    `).join('');
+    tampilkanKandidat(r.candidates);
+    pesan(`Pemindaian selesai. ${r.total} kandidat unik.`);
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
+}
+
+async function imporKandidat() {
+  if (!kandidatOsint.length) return;
+  pesan('Memasukkan kandidat ke antrean...');
+  try {
+    const r = await api('/api/osint/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: kandidatOsint }),
+    });
+    pesan(`Masuk antrean: ${r.added}. Dilewati: ${r.skipped_existing}. Tidak sah: ${r.invalid}.`);
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
+}
+
+async function muatContoh() {
+  try {
+    const r = await api('/api/seeds/example');
+    $('seeds-input').value = r.text;
+    pesan(r.ok ? 'Contoh benih dimuat.' : `Contoh benih tidak dapat dibaca: ${r.error}`);
+  } catch (err) {
+    pesan(`Gagal memuat contoh benih: ${err.message}`, true);
+  }
+}
+
+/* ---------- backup ---------- */
+async function restore(file) {
+  if (!file) return;
+  try {
+    const teks = await file.text();
+    const r = await api('/api/import/json', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: teks,
+    });
+    $('restore-status').textContent = `${r.imported} entri dipulihkan.`;
+    pesan(`Restore selesai: ${r.imported} entri.`);
+    await muatEntri();
+  } catch (err) {
+    $('restore-status').textContent = err.message;
+    pesan(`Gagal: ${err.message}`, true);
+  }
+}
+
+/* ---------- awal ---------- */
 function init() {
-  renderCountdown();
-  setInterval(renderCountdown, 1000);
+  renderJadwal();
+  updateJam();
+  setInterval(updateJam, 1000);
 
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+      document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
       tab.classList.add('active');
-      $(`panel-${tab.dataset.tab}`).classList.add('active');
+      $(`view-${tab.dataset.tab}`).classList.add('active');
     });
   });
 
-  $('process-btn').addEventListener('click', processBulk);
-  $('clear-input-btn').addEventListener('click', () => { $('bulk-input').value = ''; });
-  $('subdomain-btn').addEventListener('click', searchSubdomains);
-  $('add-subdomains-btn').addEventListener('click', addSubdomains);
-  $('refresh-btn').addEventListener('click', loadQueue);
-  $('status-filter').addEventListener('change', renderQueue);
-  $('restore-input').addEventListener('change', (e) => restoreJson(e.target.files[0]));
+  $('process-btn').addEventListener('click', prosesBulk);
+  $('clear-btn').addEventListener('click', () => { $('bulk-input').value = ''; pesan('Kolom input dikosongkan.'); });
+  $('osint-single-btn').addEventListener('click', cariSatu);
+  $('osint-batch-btn').addEventListener('click', scanBenih);
+  $('osint-import-btn').addEventListener('click', imporKandidat);
+  $('load-example-btn').addEventListener('click', muatContoh);
+  $('refresh-btn').addEventListener('click', muatEntri);
+  $('status-filter').addEventListener('change', renderAntrean);
+  $('restore-input').addEventListener('change', (e) => restore(e.target.files[0]));
 
-  $('bulk-input').addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.key === 'Enter') processBulk();
+  $('queue-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const key = btn.dataset.key;
+    if (btn.dataset.action === 'submit') aksiSubmit(key);
+    if (btn.dataset.action === 'status') aksiStatus(key, btn.dataset.target);
+    if (btn.dataset.action === 'alasan') aksiAlasan(key);
+    if (btn.dataset.action === 'cek') aksiCek(key);
   });
 
-  loadQueue().catch((err) => toast(err.message, true));
+  $('bulk-input').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') prosesBulk();
+  });
+
+  muatEntri().catch((err) => pesan(`Gagal memuat data: ${err.message}`, true));
 }
 
 document.addEventListener('DOMContentLoaded', init);

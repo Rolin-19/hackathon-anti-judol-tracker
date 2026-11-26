@@ -30,6 +30,7 @@ from canonicalizer.rules import (
     STATUSES,
     MAX_LEN,
 )
+from osint.crtsh import collect_subdomains, fetch_subdomains as ambil_subdomain
 
 DATA_FILE = ROOT / "data" / "submissions.json"
 STATIC_DIR = Path(__file__).resolve().parent
@@ -325,37 +326,23 @@ def check_alive(urls: List[str]) -> List[dict]:
 
 # -- OSINT crt.sh -----------------------------------------------------------
 
-def fetch_subdomains(domain: str) -> List[str]:
-    """Ambil subdomain publik dari crt.sh, filter wildcard & duplikat."""
-    d = domain.strip().lower().rstrip(".")
-    d = d[4:] if d.startswith("www.") else d
-    r = evaluate(d)
-    if not r.valid:
-        return []
+def fetch_subdomains(domain: str) -> dict:
+    """Bungkus pengambilan crt.sh untuk dipakai endpoint lama."""
+    hasil = ambil_subdomain(domain, timeout=12, retries=2, delay=0.4)
+    return {
+        "domain": (domain or "").strip(),
+        "subdomains": hasil["subdomains"],
+        "ok": hasil["ok"],
+        "error": hasil["error"],
+    }
 
-    found = set()
+
+def batas(angka, nilai_default: int, minimum: int, maksimum: int) -> int:
+    """Ambil bilangan dari payload dengan batas aman."""
     try:
-        resp = requests.get(
-            f"https://crt.sh/?q=%.{r.canonical_key}&output=json",
-            timeout=15,
-            headers={"User-Agent": USER_AGENT},
-        )
-        if resp.status_code == 200:
-            for row in resp.json():
-                name = row.get("name_value", "")
-                for part in str(name).splitlines():
-                    part = part.strip().lower().rstrip(".")
-                    if not part or "*" in part:
-                        continue
-                    sub = evaluate(part)
-                    if sub.valid:
-                        found.add(sub.canonical_key)
-    except (requests.exceptions.RequestException, ValueError, TypeError):
-        return sorted(found)
-
-    # Jangan kembalikan domain induk itu sendiri.
-    found.discard(r.canonical_key)
-    return sorted(found)
+        return max(minimum, min(maksimum, int(angka)))
+    except (TypeError, ValueError):
+        return nilai_default
 
 
 # -- HTTP Handler -----------------------------------------------------------
@@ -434,10 +421,27 @@ class Handler(SimpleHTTPRequestHandler):
                 "text/csv",
             )
 
+        if path == "/api/seeds/example":
+            # Contoh benih disajikan lewat API karena folder data tidak ikut
+            # disajikan sebagai file statis oleh server.
+            contoh = ROOT / "data" / "seeds.example.txt"
+            try:
+                teks = contoh.read_text(encoding="utf-8")
+                return self._json({"ok": True, "text": teks, "error": ""})
+            except OSError as exc:
+                return self._json({
+                    "ok": False,
+                    "text": "tokobudi.id\ncontoh.id\npromo judol",
+                    "error": f"Berkas contoh tidak dapat dibaca: {exc}",
+                })
+
         if path == "/api/subdomains":
             qs = parse_qs(parsed.query)
             domain = (qs.get("domain") or [""])[0]
-            return self._json({"domain": domain, "subdomains": fetch_subdomains(domain)})
+            hasil = fetch_subdomains(domain)
+            # Error disampaikan sebagai field, bukan HTTP 500, supaya antarmuka
+            # bisa menampilkan pesan yang jelas tanpa memutus alur kerja.
+            return self._json(hasil)
 
         return super().do_GET()
 
@@ -477,6 +481,45 @@ class Handler(SimpleHTTPRequestHandler):
                 if not isinstance(urls, list):
                     urls = [u for u in data.get("canonical_keys", [])]
                 return self._json({"results": check_alive(urls)})
+
+            if path == "/api/osint/scan":
+                data = self._json_body()
+                seeds = data.get("seeds", [])
+                if not isinstance(seeds, list):
+                    return self._json({"error": "seeds harus berupa daftar teks"}, 400)
+                hasil = collect_subdomains(
+                    seeds,
+                    timeout=batas(data.get("timeout"), 12, 1, 30),
+                    retries=batas(data.get("retries"), 2, 0, 4),
+                    delay=max(0.0, min(5.0, float(data.get("delay", 0.4) or 0.4))),
+                )
+                return self._json(hasil)
+
+            if path == "/api/osint/import":
+                data = self._json_body()
+                urls = data.get("urls", [])
+                if not isinstance(urls, list):
+                    return self._json({"error": "urls harus berupa daftar teks"}, 400)
+                baru = []
+                skipped = 0
+                for u in urls:
+                    if not isinstance(u, str) or not u.strip():
+                        skipped += 1
+                        continue
+                    r = evaluate(u.strip())
+                    if r.valid and r.canonical_key in self.tracker.entries:
+                        skipped += 1
+                    else:
+                        baru.append(u.strip())
+                diproses = self.tracker.process_bulk(baru)
+                return self._json({
+                    "success": True,
+                    "added": diproses["unique_count"],
+                    "skipped_existing": skipped,
+                    "invalid": diproses["invalid_count"],
+                    "duplicates": diproses["duplicate_count"],
+                    "summary": self.tracker.summary(),
+                })
 
             if path == "/api/import/json":
                 raw = self._body().decode("utf-8", errors="replace")

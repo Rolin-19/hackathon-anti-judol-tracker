@@ -3,138 +3,157 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Solo Tracker — Berantas Web Ilegal</title>
+  <title>Workspace Riset — Anti Judol</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="app">
 
-    <!-- HEADER -->
     <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark">BJ</div>
-        <div>
-          <h1>Solo Tracker</h1>
-          <p>Hackathon Berantas Web Ilegal di Indo · imphnen.dev</p>
-        </div>
+      <div class="ident">
+        <span class="ident-name">WORKSPACE RISET</span>
+        <span class="ident-sub">Hackathon Berantas Web Ilegal di Indo · mode solo</span>
       </div>
-      <div class="scoreboard">
-        <div class="score-item">
-          <span class="score-label">Skor Solo</span>
-          <strong id="stat-score" class="score-value">0</strong>
-        </div>
-        <div class="score-item">
-          <span class="score-label">Menunggu Penilaian</span>
-          <strong id="stat-waiting" class="score-value alt">0</strong>
-        </div>
-        <div class="score-item">
-          <span class="score-label">Total Entri</span>
-          <strong id="stat-total" class="score-value alt">0</strong>
-        </div>
+      <div class="clock">
+        <span>Waktu WIB</span>
+        <time id="clock" class="mono">--</time>
       </div>
     </header>
 
-    <!-- COUNTDOWN WIB -->
-    <section class="countdown" id="countdown"></section>
+    <section class="metrics" aria-label="Ringkasan angka">
+      <div class="metric"><span>Skor Valid</span><strong id="m-score" class="mono">0</strong></div>
+      <div class="metric"><span>Menunggu</span><strong id="m-waiting" class="mono">0</strong></div>
+      <div class="metric"><span>Siap Submit</span><strong id="m-ready" class="mono">0</strong></div>
+      <div class="metric"><span>Ditolak</span><strong id="m-rejected" class="mono">0</strong></div>
+      <div class="metric"><span>Duplikat</span><strong id="m-duplicate" class="mono">0</strong></div>
+    </section>
 
-    <!-- TABS -->
-    <nav class="tabs" role="tablist">
-      <button class="tab active" data-tab="cleaner" role="tab">1 · Bulk Cleaner &amp; OSINT</button>
-      <button class="tab" data-tab="queue" role="tab">2 · Antrean Submit &amp; Status</button>
+    <section class="schedule" id="schedule" aria-label="Jadwal resmi WIB"></section>
+
+    <nav class="tabs">
+      <button type="button" class="tab active" data-tab="work">Riset &amp; Input</button>
+      <button type="button" class="tab" data-tab="queue">Antrean Submit</button>
     </nav>
 
-    <!-- PANEL 1 -->
-    <section class="panel active" id="panel-cleaner">
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-head">
-            <h2>Tempel URL / Domain</h2>
-            <span class="muted">Satu per baris · ratusan entri ok</span>
+    <main>
+      <section class="view active" id="view-work">
+        <div class="columns">
+
+          <div class="pane">
+            <div class="pane-head">
+              <h2>Tempel Massal / Bersihkan URL</h2>
+              <span class="hint">Satu entri per baris</span>
+            </div>
+            <textarea id="bulk-input" rows="11" spellcheck="false" placeholder="https://www.TokoBudi.id/&#10;tokobudi.id/produk&#10;blog.tokobudi.id"></textarea>
+            <div class="actions">
+              <button type="button" id="process-btn" class="btn primary">Proses &amp; Masuk Antrean</button>
+              <button type="button" id="clear-btn" class="btn">Kosongkan</button>
+            </div>
+            <p class="note">Pembanding duplikat memakai bentuk catat. URL yang disalin tetap memakai skema https.</p>
+
+            <div class="result-block">
+              <div class="result-head"><h3>Lolos &amp; Unik</h3><span id="count-unique" class="mono">0</span></div>
+              <div id="result-unique" class="rows"></div>
+            </div>
+            <div class="result-block">
+              <div class="result-head"><h3>Duplikat</h3><span id="count-duplicate" class="mono">0</span></div>
+              <div id="result-duplicate" class="rows"></div>
+            </div>
+            <div class="result-block">
+              <div class="result-head"><h3>Tidak Sah</h3><span id="count-invalid" class="mono">0</span></div>
+              <div id="result-invalid" class="rows"></div>
+            </div>
           </div>
-          <textarea id="bulk-input" rows="12" spellcheck="false"
-            placeholder="https://www.TokoBudi.id/&#10;tokobudi.id/produk&#10;blog.tokobudi.id&#10;http://192.168.1.1"></textarea>
-          <div class="row-actions">
-            <button id="process-btn" class="btn primary">Proses &amp; Masuk Antrean</button>
-            <button id="clear-input-btn" class="btn ghost">Kosongkan</button>
+
+          <div class="pane">
+            <div class="pane-head">
+              <h2>Riset Subdomain Pasif</h2>
+              <span class="hint">Sumber: crt.sh</span>
+            </div>
+
+            <label class="field-label" for="osint-single">Satu domain / kata kunci</label>
+            <div class="inline">
+              <input type="text" id="osint-single" spellcheck="false" placeholder="tokobudi.id">
+              <button type="button" id="osint-single-btn" class="btn primary">Cari</button>
+            </div>
+            <p id="osint-single-status" class="note"></p>
+            <div id="osint-single-list" class="chips"></div>
+
+            <div class="rule"></div>
+
+            <label class="field-label" for="seeds-input">Daftar benih untuk pivot</label>
+            <textarea id="seeds-input" rows="5" spellcheck="false" placeholder="tokobudi.id&#10;contoh.id&#10;promo judol"></textarea>
+            <div class="actions">
+              <button type="button" id="osint-batch-btn" class="btn primary">Scan Benih</button>
+              <button type="button" id="load-example-btn" class="btn">Contoh Benih</button>
+            </div>
+            <p id="osint-batch-status" class="note"></p>
+            <div id="osint-batch-results" class="rows"></div>
+            <div id="osint-batch-list" class="chips"></div>
+
+            <div class="actions import-row">
+              <button type="button" id="osint-import-btn" class="btn primary" disabled>Masukkan Kandidat ke Antrean</button>
+            </div>
           </div>
-          <p class="hint">Bentuk catat (<code>canonical_key</code>) dipakai untuk mengunci duplikat. URL yang disalin tetap memakai skema <code>https://</code>.</p>
         </div>
 
-        <div class="card">
-          <div class="card-head">
-            <h2>Cari Subdomain Pasif</h2>
-            <span class="muted">crt.sh · tanpa scan aktif</span>
+        <div class="pane backup">
+          <div class="pane-head">
+            <h2>Backup &amp; Restore</h2>
+            <span class="hint">Data disimpan di mesin ini</span>
           </div>
-          <div class="inline-form">
-            <input id="domain-input" type="text" placeholder="contoh.id" spellcheck="false">
-            <button id="subdomain-btn" class="btn primary">Cari</button>
+          <div class="actions">
+            <a class="btn" href="/api/export/json" download>Unduh JSON</a>
+            <a class="btn" href="/api/export/csv" download>Unduh CSV</a>
+            <label class="btn file-label">Restore JSON<input id="restore-input" type="file" accept=".json,application/json" hidden></label>
           </div>
-          <div id="subdomain-status" class="muted"></div>
-          <div id="subdomain-list" class="chip-list"></div>
-          <button id="add-subdomains-btn" class="btn primary full" disabled>Masukkan Temuan ke Antrean</button>
+          <p id="restore-status" class="note"></p>
         </div>
-      </div>
+      </section>
 
-      <div class="card results">
-        <div class="card-head"><h2>Hasil Klasifikasi</h2><span id="process-summary" class="muted"></span></div>
-        <div class="result-grid">
-          <div class="result-box ok">
-            <h3>Lolos &amp; Unik <span id="count-unique" class="pill">0</span></h3>
-            <div id="list-unique" class="result-list"></div>
+      <section class="view" id="view-queue">
+        <div class="pane">
+          <div class="pane-head">
+            <h2>Antrean Submit</h2>
+            <div class="queue-tools">
+              <label class="field-label" for="status-filter">Filter</label>
+              <select id="status-filter">
+                <option value="all">Semua</option>
+                <option value="Siap Submit">Siap Submit</option>
+                <option value="Menunggu Penilaian">Menunggu Penilaian</option>
+                <option value="Valid">Valid</option>
+                <option value="Duplikat">Duplikat</option>
+                <option value="Ditolak">Ditolak</option>
+              </select>
+              <button type="button" id="refresh-btn" class="btn">Muat Ulang</button>
+            </div>
           </div>
-          <div class="result-box warn">
-            <h3>Duplikat <span id="count-duplicate" class="pill">0</span></h3>
-            <div id="list-duplicate" class="result-list"></div>
-          </div>
-          <div class="result-box bad">
-            <h3>Tidak Sah <span id="count-invalid" class="pill">0</span></h3>
-            <div id="list-invalid" class="result-list"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- PANEL 2 -->
-    <section class="panel" id="panel-queue">
-      <div class="card">
-        <div class="card-head">
-          <h2>Antrean Submit</h2>
-          <div class="filter-wrap">
-            <select id="status-filter" aria-label="Filter status">
-              <option value="all">Semua</option>
-              <option value="Siap Submit">Siap Submit</option>
-              <option value="Menunggu Penilaian">Menunggu Penilaian</option>
-              <option value="Valid">Valid</option>
-              <option value="Duplikat">Duplikat</option>
-              <option value="Ditolak">Ditolak</option>
-            </select>
-            <button id="refresh-btn" class="btn ghost">Muat Ulang</button>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th class="col-url">URL Sah</th>
+                  <th class="col-key">Bentuk Catat</th>
+                  <th class="col-status">Status</th>
+                  <th class="col-time">Waktu WIB</th>
+                  <th class="col-score">Skor</th>
+                  <th class="col-action">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="queue-body"></tbody>
+            </table>
           </div>
         </div>
-        <div id="queue-list" class="queue"></div>
-      </div>
+      </section>
+    </main>
 
-      <div class="card backup-card">
-        <div class="card-head"><h2>Backup &amp; Restore (Pribadi)</h2><span class="muted">Simpan cadangan sebelum hari-H</span></div>
-        <div class="row-actions">
-          <a class="btn ghost" href="/api/export/json" download>Unduh JSON</a>
-          <a class="btn ghost" href="/api/export/csv" download>Unduh CSV</a>
-          <label class="btn ghost file-btn">
-            Restore JSON
-            <input id="restore-input" type="file" accept=".json,application/json" hidden>
-          </label>
-        </div>
-        <p id="restore-status" class="muted"></p>
-      </div>
-    </section>
-
-    <footer class="foot">
-      <span>Mode Solo · penyimpanan lokal <code>data/submissions.json</code></span>
-      <span>WIB = Asia/Jakarta</span>
+    <footer class="statusbar">
+      <span id="statusline">Siap.</span>
+      <span class="mono">data/submissions.json</span>
     </footer>
   </div>
 
-  <div id="toast" class="toast" aria-live="polite"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

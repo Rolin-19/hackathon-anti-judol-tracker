@@ -1,0 +1,7 @@
+# Contoh daftar benih untuk riset OSINT pasif.
+# Satu entri per baris. Baris diawali # diabaikan.
+# Boleh domain induk atau kata kunci untuk pivot pencarian.
+
+tokobudi.id
+contoh.id
+promo judol

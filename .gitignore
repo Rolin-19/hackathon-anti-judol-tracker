@@ -1,12 +1,16 @@
 # Data riset pribadi (jangan ikut ter-commit)
 data/submissions.json
+data/seeds.txt
 data/*.csv
+data/osint-*.json
 
-# Python
+# Python dan cache pengujian
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 
-# Sistem
+# Sistem dan cache browser
 .DS_Store
 Thumbs.db
+.eslintcache

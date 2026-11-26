@@ -16,6 +16,30 @@ python web\app.py
 
 Lalu buka `http://localhost:8765`. Data tersimpan lokal di `data/submissions.json`.
 
+## Riset OSINT pasif (crt.sh)
+
+Riset hanya membaca catatan sertifikat publik di `crt.sh`. Tidak ada port scan, tidak ada request langsung ke situs target, dan semua temuan disaring memakai aturan canonicalizer sebelum masuk antrean.
+
+Siapkan daftar benih pribadi di `data/seeds.txt` (diabaikan git). Satu baris berisi domain induk atau kata kunci; baris diawali `#` diabaikan. Contoh tersedia di `data/seeds.example.txt`.
+
+```powershell
+# Salin contoh, lalu isi benih sesuai kebutuhan
+Copy-Item data\seeds.example.txt data\seeds.txt
+
+# Jalankan riset sekaligus masukkan kandidat unik ke antrean
+python -m osint.cli --input data/seeds.txt
+
+# Hanya melihat hasil, tanpa mengubah antrean
+python -m osint.cli --input data/seeds.txt --no-import --output data\osint-hasil.json
+
+# Batasi benih dan atur jeda sopan antar permintaan
+python -m osint.cli --input data/seeds.txt --limit 5 --delay 1.0 --timeout 15
+```
+
+Opsi lain: `--retries` (jumlah percobaan ulang, bawaan 2). Jika `crt.sh` lambat atau gagal, pesan kesalahan ditampilkan dalam bahasa Indonesia dan proses tetap lanjut ke benih berikutnya. Entri yang sudah ada tidak ditimpa, termasuk `Valid`, `Menunggu Penilaian`, dan `Duplikat`.
+
+Tombol **Contoh Benih** di dashboard memuat `data/seeds.example.txt` lewat `GET /api/seeds/example`.
+
 ## Konsep penting
 
 | Istilah | Arti |
@@ -27,10 +51,10 @@ Contoh: `https://www.TokoBudi.id/` → `submit_url = https://www.TokoBudi.id/`, 
 
 ## Alur hari-H
 
-1. **Panel 1 — Bulk Cleaner**: tempel ratusan URL/domain → pilah menjadi *Lolos & Unik*, *Duplikat*, dan *Tidak Sah*. Cari subdomain lewat `crt.sh`, lalu masukkan temuan ke antrean.
-2. **Panel 2 — Antrean**: klik **Cek Hidup** bila perlu, lalu **Salin URL & Tandai Submitted**. URL yang disalin adalah `submit_url` (berprotokol); clipboard langsung terisi, status berubah ke *Menunggu Penilaian*, dan jam **WIB** tercatat untuk tie-breaker.
+1. **Tab Riset & Input**: tempel ratusan URL/domain pada **Tempel Massal** → pilah menjadi *Lolos & Unik*, *Duplikat*, dan *Tidak Sah*. Pada panel **Riset Subdomain Pasif**, cari satu domain/kata kunci atau scan banyak benih dari `crt.sh`, lalu klik **Masukkan Kandidat ke Antrean**.
+2. **Tab Antrean Submit**: klik **Cek Hidup** bila perlu, lalu **Salin URL & Tandai Submitted**. URL yang disalin adalah `submit_url` (berprotokol); clipboard langsung terisi, status berubah ke *Menunggu Penilaian*, dan jam **WIB** tercatat untuk tie-breaker.
 3. Setelah hasil panitia: tandai **Valid (+1)** atau **Ditolak** (isi alasannya). Entri ditolak boleh **Ajukan Ulang / Re-queue**. Entri **Duplikat** terkunci permanen, tanpa re-queue.
-4. Unduh cadangan **JSON/CSV** dari Panel 2. Restore JSON tersedia untuk pemulihan pribadi.
+4. Unduh cadangan **JSON/CSV** dari tab Riset & Input. Restore JSON tersedia untuk pemulihan pribadi.
 
 ## Jadwal resmi (WIB / Asia/Jakarta)
 
@@ -43,6 +67,7 @@ Contoh: `https://www.TokoBudi.id/` → `submit_url = https://www.TokoBudi.id/`, 
 
 ```powershell
 python -m unittest discover -s canonicalizer -v
+python -m unittest discover -s osint -v
 ```
 
 ## Endpoint lokal
@@ -52,5 +77,10 @@ python -m unittest discover -s canonicalizer -v
 - `POST /api/submit` — salin & tandai submitted
 - `POST /api/status` — transisi status
 - `POST /api/check-alive` — pre-check HTTP (4 detik, UA browser)
-- `GET /api/subdomains?domain=...` — OSINT crt.sh
+- `GET /api/seeds/example` — contoh daftar benih
+- `GET /api/subdomains?domain=...` — satu pencarian pasif ke crt.sh
+- `POST /api/osint/scan` — scan banyak benih (`seeds`, opsional `timeout`, `retries`, `delay`)
+- `POST /api/osint/import` — masukkan kandidat unik ke antrean tanpa menimpa entri lama
 - `GET /api/export/json`, `GET /api/export/csv`, `POST /api/import/json`
+
+Ketika `crt.sh` gagal, endpoint mengembalikan HTTP 200 dengan `ok: false` dan pesan bahasa Indonesia pada field `error`, supaya antarmuka tidak putus.
