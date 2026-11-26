@@ -107,7 +107,10 @@
             <a class="btn" href="/api/export/json" download>Unduh JSON</a>
             <a class="btn" href="/api/export/csv" download>Unduh CSV</a>
             <label class="btn file-label">Restore JSON<input id="restore-input" type="file" accept=".json,application/json" hidden></label>
+            <button type="button" id="rutinitas-refresh-btn" class="btn">Muat Status Rutinitas</button>
           </div>
+          <p id="rutinitas-status" class="note">Backup terakhir: -</p>
+          <p id="rutinitas-log" class="note"></p>
           <p id="restore-status" class="note"></p>
         </div>
       </section>

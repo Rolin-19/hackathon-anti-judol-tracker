@@ -40,6 +40,46 @@ Opsi lain: `--retries` (jumlah percobaan ulang, bawaan 2). Jika `crt.sh` lambat 
 
 Tombol **Contoh Benih** di dashboard memuat `data/seeds.example.txt` lewat `GET /api/seeds/example`.
 
+## Otomatisasi rutinitas harian
+
+Satu perintah menjalankan seluruh rutinitas: baca benih → panen `crt.sh` → saring `canonicalizer` → impor aman → cek hidup/mati → backup JSON bertanggal → tulis log.
+
+```powershell
+python -m osint.rutinitas --seeds data/seeds.txt --check-alive
+```
+
+Mode aman lain:
+
+```powershell
+# Tanpa cek hidup/mati (paling cepat)
+python -m osint.rutinitas --seeds data/seeds.txt
+
+# Hapus hanya entri Siap Submit yang mati (default: tidak menghapus)
+python -m osint.rutinitas --seeds data/seeds.txt --check-alive --prune-dead
+```
+
+Aturan penting:
+
+- `data/seeds.txt` belum ada → otomatis memakai `data/seeds.example.txt` dan catatan itu ditulis ke log.
+- Entri lama tidak pernah ditimpa atau diubah, termasuk `Valid`, `Menunggu Penilaian`, `Duplikat`, dan `Ditolak`.
+- Cek hidup memakai pre-check HTTP ringan: status apa pun (`200`/`301`/`403`/`503`) dihitung hidup; timeout/NXDOMAIN/gagal koneksi dihitung mati. Jeda dan timeout bisa diatur lewat `--alive-delay` dan `--alive-timeout`.
+- Backup: `data/backups/submissions-YYYY-MM-DD_HHMM.json`.
+- Log ringkas: `data/rutinitas.log`. Keduanya diabaikan git.
+
+Jalankan sekali klik lewat **`jalankan-rutinitas-sekali.bat`**. Daftarkan jadwal harian pagi (07.00) dan malam (19.00) lewat PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File daftar-jadwal-otomatis.ps1
+```
+
+Hapus jadwal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File daftar-jadwal-otomatis.ps1 -Hapus
+```
+
+Tugas Windows memakai waktu lokal komputer; pastikan komputer menggunakan WIB. Workbench menampilkan backup terakhir dan baris log terakhir lewat `GET /api/rutinitas/status`.
+
 ## Konsep penting
 
 | Istilah | Arti |
@@ -78,6 +118,7 @@ python -m unittest discover -s osint -v
 - `POST /api/status` — transisi status
 - `POST /api/check-alive` — pre-check HTTP (4 detik, UA browser)
 - `GET /api/seeds/example` — contoh daftar benih
+- `GET /api/rutinitas/status` — backup terakhir dan baris log rutinitas
 - `GET /api/subdomains?domain=...` — satu pencarian pasif ke crt.sh
 - `POST /api/osint/scan` — scan banyak benih (`seeds`, opsional `timeout`, `retries`, `delay`)
 - `POST /api/osint/import` — masukkan kandidat unik ke antrean tanpa menimpa entri lama

@@ -33,6 +33,8 @@ from canonicalizer.rules import (
 from osint.crtsh import collect_subdomains, fetch_subdomains as ambil_subdomain
 
 DATA_FILE = ROOT / "data" / "submissions.json"
+BACKUP_DIR = ROOT / "data" / "backups"
+RUTINITAS_LOG = ROOT / "data" / "rutinitas.log"
 STATIC_DIR = Path(__file__).resolve().parent
 WIB = pytz.timezone("Asia/Jakarta")
 USER_AGENT = (
@@ -345,6 +347,37 @@ def batas(angka, nilai_default: int, minimum: int, maksimum: int) -> int:
         return nilai_default
 
 
+def info_rutinitas() -> dict:
+    """Ringkasan backup terakhir dan baris log terakhir untuk workbench."""
+    backup_terakhir = None
+    if BACKUP_DIR.exists():
+        berkas = sorted(
+            BACKUP_DIR.glob("submissions-*.json"),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        if berkas:
+            backup_terakhir = berkas[0]
+
+    log_terakhir = ""
+    if RUTINITAS_LOG.exists():
+        try:
+            baris = [
+                b.strip() for b in RUTINITAS_LOG.read_text(encoding="utf-8").splitlines()
+                if b.strip()
+            ]
+            log_terakhir = baris[-1] if baris else ""
+        except OSError:
+            log_terakhir = ""
+
+    return {
+        "ok": True,
+        "backup_terakhir": backup_terakhir.name if backup_terakhir else None,
+        "backup_path": str(backup_terakhir) if backup_terakhir else None,
+        "log_terakhir": log_terakhir,
+    }
+
+
 # -- HTTP Handler -----------------------------------------------------------
 
 class Handler(SimpleHTTPRequestHandler):
@@ -420,6 +453,9 @@ class Handler(SimpleHTTPRequestHandler):
                 "solo-tracker.csv",
                 "text/csv",
             )
+
+        if path == "/api/rutinitas/status":
+            return self._json(info_rutinitas())
 
         if path == "/api/seeds/example":
             # Contoh benih disajikan lewat API karena folder data tidak ikut

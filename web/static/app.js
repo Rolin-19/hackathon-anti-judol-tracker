@@ -343,6 +343,18 @@ async function restore(file) {
   }
 }
 
+async function muatStatusRutinitas() {
+  try {
+    const r = await api('/api/rutinitas/status');
+    $('rutinitas-status').textContent = r.backup_terakhir
+      ? `Backup terakhir: ${r.backup_terakhir}`
+      : 'Backup terakhir: belum ada';
+    $('rutinitas-log').textContent = r.log_terakhir || '';
+  } catch (err) {
+    $('rutinitas-status').textContent = `Gagal memuat status rutinitas: ${err.message}`;
+  }
+}
+
 /* ---------- awal ---------- */
 function init() {
   renderJadwal();
@@ -365,6 +377,7 @@ function init() {
   $('osint-import-btn').addEventListener('click', imporKandidat);
   $('load-example-btn').addEventListener('click', muatContoh);
   $('refresh-btn').addEventListener('click', muatEntri);
+  $('rutinitas-refresh-btn').addEventListener('click', muatStatusRutinitas);
   $('status-filter').addEventListener('change', renderAntrean);
   $('restore-input').addEventListener('change', (e) => restore(e.target.files[0]));
 
@@ -383,6 +396,7 @@ function init() {
   });
 
   muatEntri().catch((err) => pesan(`Gagal memuat data: ${err.message}`, true));
+  muatStatusRutinitas();
 }
 
 document.addEventListener('DOMContentLoaded', init);

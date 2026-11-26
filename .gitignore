@@ -3,6 +3,8 @@ data/submissions.json
 data/seeds.txt
 data/*.csv
 data/osint-*.json
+data/backups/
+data/rutinitas.log
 
 # Python dan cache pengujian
 __pycache__/
