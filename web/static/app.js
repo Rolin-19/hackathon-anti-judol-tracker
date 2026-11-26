@@ -3,10 +3,12 @@
 const $ = (id) => document.getElementById(id);
 
 const JADWAL = [
-  { label: 'Tutup pendaftaran', tanggal: 'Jumat, 4 Des 2026, 00.00 WIB', iso: '2026-12-04T00:00:00+07:00' },
-  { label: 'Mulai submit', tanggal: 'Sabtu, 5 Des 2026, 00.00 WIB', iso: '2026-12-05T00:00:00+07:00' },
-  { label: 'Tutup submit', tanggal: 'Kamis, 10 Des 2026, 00.00 WIB', iso: '2026-12-10T00:00:00+07:00' },
-  { label: 'Pengumuman', tanggal: 'Senin, 14 Des 2026, 00.00 WIB', iso: '2026-12-14T00:00:00+07:00' },
+  { label: 'Pendaftaran dibuka', tanggal: 'Rab, 25 Nov 2026, 00.00 WIB', iso: '2026-11-25T00:00:00+07:00' },
+  { label: 'Pendaftaran ditutup', tanggal: 'Jum, 4 Des 2026, 00.00 WIB', iso: '2026-12-04T00:00:00+07:00' },
+  { label: 'Hackaton dimulai (Submit link dibuka)', tanggal: 'Sab, 5 Des 2026, 00.00 WIB', iso: '2026-12-05T00:00:00+07:00' },
+  { label: 'Batas submit', tanggal: 'Kam, 10 Des 2026, 00.00 WIB', iso: '2026-12-10T00:00:00+07:00' },
+  { label: 'Pengumuman pemenang', tanggal: 'Sen, 14 Des 2026, 00.00 WIB', iso: '2026-12-14T00:00:00+07:00' },
+  { label: 'Survei peserta ditutup', tanggal: 'Min, 27 Des 2026, 00.00 WIB', iso: '2026-12-27T00:00:00+07:00' },
 ];
 
 const STATUS_KELAS = {
@@ -74,6 +76,7 @@ function updateJam() {
   $('clock').textContent = waktuWib(new Date().toISOString());
 
   const sekarang = Date.now();
+  let berikutnya = true;
   JADWAL.forEach((j) => {
     const el = document.querySelector(`[data-jadwal="${j.iso}"]`);
     if (!el) return;
@@ -87,7 +90,9 @@ function updateJam() {
     const jam = Math.floor((sisa % 86400000) / 3600000);
     const menit = Math.floor((sisa % 3600000) / 60000);
     const detik = Math.floor((sisa % 60000) / 1000);
-    el.textContent = `${hari}h ${String(jam).padStart(2, '0')}j ${String(menit).padStart(2, '0')}m ${String(detik).padStart(2, '0')}d`;
+    const sisaTeks = `${hari}h ${String(jam).padStart(2, '0')}j ${String(menit).padStart(2, '0')}m ${String(detik).padStart(2, '0')}d`;
+    el.textContent = berikutnya ? `Berikutnya · ${sisaTeks}` : sisaTeks;
+    berikutnya = false;
   });
 }
 

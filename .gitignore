@@ -3,6 +3,7 @@ data/submissions.json
 data/seeds.txt
 data/*.csv
 data/osint-*.json
+data/*.ics
 data/backups/
 data/rutinitas.log
 

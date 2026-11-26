@@ -103,10 +103,20 @@ Contoh: `https://www.TokoBudi.id/` → `submit_url = https://www.TokoBudi.id/`, 
 
 ## Jadwal resmi (WIB / Asia/Jakarta)
 
-- Tutup Pendaftaran: **Jumat, 4 Des 2026, 00.00 WIB**
-- Mulai Submit: **Sabtu, 5 Des 2026, 00.00 WIB**
-- Tutup Submit: **Kamis, 10 Des 2026, 00.00 WIB**
-- Pengumuman: **Senin, 14 Des 2026, 00.00 WIB**
+- Pendaftaran dibuka: **Rab, 25 Nov 2026, 00.00 WIB**
+- Pendaftaran ditutup: **Jum, 4 Des 2026, 00.00 WIB**
+- Hackaton dimulai (Submit link dibuka): **Sab, 5 Des 2026, 00.00 WIB**
+- Batas submit: **Kam, 10 Des 2026, 00.00 WIB**
+- Pengumuman pemenang: **Sen, 14 Des 2026, 00.00 WIB**
+- Survei peserta ditutup: **Min, 27 Des 2026, 00.00 WIB**
+
+Berkas kalender `.ics` untuk lima tenggat utama dibuat dengan:
+
+```powershell
+python -m osint.jadwal_ics
+```
+
+Hasilnya di `data/jadwal-hackathon-imphnen.ics` (terabaikan Git), siap diimpor ke Google Calendar. Semua waktu sudah dikonversi dari WIB ke UTC.
 
 ## Unit test
 
