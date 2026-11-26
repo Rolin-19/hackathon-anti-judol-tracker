@@ -164,6 +164,7 @@ class TestSiklusPenuh(unittest.TestCase):
                 backups=backups,
                 fetcher=fetcher,
                 sleeper=lambda _: None,
+                sources=("crtsh",),
                 waktu=WAKTU,
             )
 
@@ -212,7 +213,7 @@ class TestCekHidup(unittest.TestCase):
             ambil=ambil,
         )
         self.assertTrue(hasil[0]["alive"])
-        self.assertEqual(hasil[0]["label"], "Hidup (HTTP 503)")
+        self.assertEqual(hasil[0]["label"], "Hidup (Siap Tembak)")
         self.assertFalse(hasil[1]["alive"])
         self.assertEqual(hasil[1]["label"], "Mati / NXDOMAIN")
         self.assertFalse(hasil[2]["alive"])
@@ -259,6 +260,7 @@ class TestCekHidup(unittest.TestCase):
                 backups=akar / "backups",
                 fetcher=lambda url, timeout: [],
                 sleeper=lambda _: None,
+                sources=("crtsh",),
                 alive_fetcher=ambil,
                 check_alive=True,
                 alive_delay=0,
@@ -325,6 +327,7 @@ class TestGuardrailPlaceholder(unittest.TestCase):
                 backups=akar / "backups",
                 fetcher=fetcher,
                 sleeper=lambda _: None,
+                sources=("crtsh",),
                 waktu=WAKTU,
             )
 
@@ -364,6 +367,7 @@ class TestGuardrailPlaceholder(unittest.TestCase):
                 backups=akar / "backups",
                 fetcher=fetcher,
                 sleeper=lambda _: None,
+                sources=("crtsh",),
                 waktu=WAKTU,
             )
 

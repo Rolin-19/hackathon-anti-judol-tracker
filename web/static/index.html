@@ -70,7 +70,7 @@
           <div class="pane">
             <div class="pane-head">
               <h2>Riset Subdomain Pasif</h2>
-              <span class="hint">Sumber: crt.sh</span>
+              <span class="hint">Sumber: crt.sh + urlscan.io</span>
             </div>
 
             <label class="field-label" for="osint-single">Satu domain / kata kunci</label>
@@ -122,6 +122,42 @@
       </section>
 
       <section class="view" id="view-queue">
+        <div class="pane rapid">
+          <div class="pane-head">
+            <h2>Mode Tembak Cepat</h2>
+            <span class="hint">Prioritas: hidup → belum dicek → parkir/mati · pintasan Alt+S</span>
+          </div>
+          <div class="rapid-grid">
+            <div class="rapid-target">
+              <div class="field-label">URL siap salin</div>
+              <div id="rapid-url" class="rapid-url mono">Tidak ada entri Siap Submit.</div>
+              <div id="rapid-key" class="hint mono"></div>
+              <div id="rapid-status" class="hint"></div>
+              <div id="rapid-title" class="hint"></div>
+            </div>
+            <div class="rapid-side">
+              <div><span>Ditembak</span><strong id="rapid-count" class="mono">0</strong></div>
+              <div><span>Kecepatan</span><strong id="rapid-rate" class="mono">0 entri/menit</strong></div>
+              <div><span>Terakhir</span><strong id="rapid-last" class="mono">-</strong></div>
+              <button type="button" id="rapid-btn" class="btn primary" disabled>Salin &amp; Lanjut Berikutnya (Alt+S)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane sync">
+          <div class="pane-head">
+            <h2>Tempel Hasil Penilaian Panitia</h2>
+            <span class="hint">Satu baris riwayat per entri · Valid / Duplikat / Ditolak</span>
+          </div>
+          <textarea id="sync-input" rows="5" spellcheck="false" placeholder="https://domain.id/slot — Valid&#10;https://mirror.id — Duplikat&#10;https://gagal.id — Ditolak, alasan: konten tidak relevan"></textarea>
+          <div class="actions">
+            <button type="button" id="sync-btn" class="btn primary">Sinkronkan Status Massal</button>
+            <button type="button" id="sync-clear-btn" class="btn">Kosongkan</button>
+          </div>
+          <p id="sync-status" class="note"></p>
+          <div id="sync-results" class="rows"></div>
+        </div>
+
         <div class="pane">
           <div class="pane-head">
             <h2>Antrean Submit</h2>

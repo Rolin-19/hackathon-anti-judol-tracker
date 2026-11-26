@@ -25,6 +25,7 @@ let aliveMap = {};
 let liveTimer = null;
 let liveController = null;
 let liveNomor = 0;
+let tembakan = [];
 
 /* ---------- dasar ---------- */
 async function api(url, opsi = {}) {
@@ -121,9 +122,17 @@ async function muatAngka() {
 
 async function muatEntri() {
   const r = await api('/api/entries');
-  entri = r.entries || [];
+  entri = (r.entries || []).slice().sort((a, b) => peringkat(a) - peringkat(b));
   renderAntrean();
+  renderRapid();
   await muatAngka();
+}
+
+function peringkat(e) {
+  const p = e.probe || {};
+  if (p.parking || p.alive === false) return 2;
+  if (p.alive === true) return 0;
+  return 1;
 }
 
 function renderAntrean() {
@@ -140,9 +149,15 @@ function renderAntrean() {
     const k = e.canonical_key;
     const st = e.status;
     const kelas = STATUS_KELAS[st] ? STATUS_KELAS[st].replace(/\s+/g, '_') : 'Siap_Submit';
-    const hidup = aliveMap[k];
-    const hidupHtml = hidup
-      ? `<div class="alive ${hidup.alive ? 'yes' : 'no'}">${esc(hidup.label)}</div>` : '';
+    const hidup = e.probe || aliveMap[k];
+    const hidupKelas = hidup && hidup.parking ? '' : (hidup && hidup.alive ? 'yes' : 'no');
+    let hidupHtml = hidup
+      ? `<div class="alive ${hidupKelas}">${esc(hidup.label)}${hidup.title ? ` · ${esc(hidup.title)}` : ''}</div>`
+      : '';
+    if (hidup && hidup.redirect_key && hidup.redirect_target) {
+      hidupHtml += `<div class="hint">Redirect: ${esc(hidup.redirect_target)}</div>`
+        + `<button class="btn" data-action="redirect" data-key="${esc(hidup.redirect_key)}" data-url="${esc(hidup.redirect_target)}">Impor Redirect</button>`;
+    }
     let aksi = '';
 
     if (st === 'Siap Submit') {
@@ -173,6 +188,47 @@ function renderAntrean() {
       <td><div class="cell-actions">${aksi}${hidupHtml}</div></td>
     </tr>`;
   }).join('');
+}
+
+/* ---------- mode tembak cepat ---------- */
+function entriTembak() {
+  return entri.find((e) => e.status === 'Siap Submit') || null;
+}
+
+function renderRapid() {
+  const e = entriTembak();
+  const btn = $('rapid-btn');
+  $('rapid-url').textContent = e ? e.submit_url : 'Tidak ada entri Siap Submit.';
+  $('rapid-key').textContent = e ? e.canonical_key : '';
+  $('rapid-status').textContent = e
+    ? (e.probe ? e.probe.label : 'Belum dicek')
+    : '';
+  $('rapid-title').textContent = e && e.probe && e.probe.title ? `Judul: ${e.probe.title}` : '';
+  btn.disabled = !e;
+
+  const menit = tembakan.length > 1
+    ? (Date.now() - tembakan[0]) / 60000
+    : 0;
+  $('rapid-count').textContent = tembakan.length;
+  const laju = menit > 0 ? Math.max(0, tembakan.length - 1) / menit : 0;
+  $('rapid-rate').textContent = `${laju.toFixed(1)} entri/menit`;
+  $('rapid-last').textContent = tembakan.length ? waktuWib(new Date(tembakan[tembakan.length - 1]).toISOString()) : '-';
+}
+
+async function tembakCepat() {
+  const e = entriTembak();
+  if (!e) return pesan('Antrean Siap Submit kosong.', true);
+  try {
+    const r = await api('/api/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ canonical_key: e.canonical_key }),
+    });
+    const ok = await salin(r.entry.submit_url);
+    tembakan.push(Date.now());
+    if (tembakan.length > 200) tembakan.shift();
+    pesan(`${ok ? 'URL tersalin' : 'Salin gagal'}: ${r.entry.submit_url} · ${waktuWib(r.entry.submitted_at)}`, !ok);
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
 }
 
 /* ---------- aksi antrean ---------- */
@@ -224,8 +280,38 @@ async function aksiCek(key) {
       body: JSON.stringify({ urls: [e.submit_url] }),
     });
     aliveMap[key] = r.results[0];
-    renderAntrean();
+    await muatEntri();
     pesan(`Hasil: ${r.results[0].label}`);
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
+}
+
+async function imporRedirect(key, url) {
+  try {
+    const r = await api('/api/process', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: [url || key] }),
+    });
+    pesan(`Redirect ${key} masuk antrean: ${r.unique_count}.`);
+    await muatEntri();
+  } catch (err) { pesan(`Gagal: ${err.message}`, true); }
+}
+
+/* ---------- sinkronisasi massal panitia ---------- */
+async function sinkronPanitia() {
+  const teks = $('sync-input').value.trim();
+  if (!teks) return pesan('Tempel baris riwayat panitia terlebih dahulu.', true);
+  pesan('Mencocokkan riwayat panitia...');
+  try {
+    const r = await api('/api/sync-panitia', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: teks }),
+    });
+    $('sync-status').textContent = `${r.terupdate} diperbarui · ${r.cocok} cocok · ${r.dilewati} sudah sesuai · ${r.tidak_cocok} tidak cocok · ${r.gagal} ditolak.`;
+    $('sync-results').innerHTML = r.rincian.length
+      ? r.rincian.map((d) => `<div class="row"><span class="key">${esc(d.canonical_key)}</span><span>${esc(d.status)}</span><span class="${d.hasil === 'Diperbarui' ? 'key' : 'why'}">${esc(d.hasil)}</span></div>`).join('')
+      : '<div class="row-empty">Tidak ada baris status yang dikenali.</div>';
+    pesan(`Sinkronisasi selesai: ${r.terupdate} entri diperbarui.`);
+    await muatEntri();
   } catch (err) { pesan(`Gagal: ${err.message}`, true); }
 }
 
@@ -278,8 +364,8 @@ function statusLive(teks) {
 
 function pesanLive(error) {
   const teks = String(error || '');
-  if (/timed out|Koneksi ke crt\.sh|HTTP 5\d\d|Permintaan ke crt\.sh|Failed to fetch/i.test(teks)) {
-    return 'crt.sh sedang sibuk. Coba lagi sebentar.';
+  if (/timed out|Koneksi ke (?:crt\.sh|urlscan\.io)|HTTP 5\d\d|Permintaan ke (?:crt\.sh|urlscan\.io)|urlscan\.io|Failed to fetch/i.test(teks)) {
+    return 'Sumber penemuan sedang sibuk. Coba lagi sebentar.';
   }
   return teks || 'Pencarian gagal.';
 }
@@ -324,7 +410,7 @@ async function cariLive(teks) {
   if (liveController) liveController.abort();
   liveController = new AbortController();
   const nomor = ++liveNomor;
-  statusLive('Mencari di crt.sh...');
+  statusLive('Mencari di crt.sh + urlscan.io...');
   try {
     const r = await api(`/api/subdomains?q=${encodeURIComponent(teks)}`, {
       signal: liveController.signal,
@@ -341,7 +427,8 @@ async function cariLive(teks) {
     setKandidat(r.baru || []);
     renderDetailLive(r.detail || []);
     const cache = r.dari_cache ? ' · cache 5 menit' : '';
-    statusLive(`Ditemukan ${r.baru.length} kandidat baru${cache}.`);
+    const sumber = (r.sumber || []).length ? ` dari ${r.sumber.join(' + ')}` : '';
+    statusLive(`Ditemukan ${r.baru.length} kandidat baru${sumber}${cache}.`);
 
     if ($('osint-auto-import').checked && r.baru.length) {
       const ditambahkan = await imporOtomatis(r.baru, nomor);
@@ -383,7 +470,7 @@ async function scanBenih() {
     });
     $('osint-batch-status').textContent = `${r.total} kandidat unik dari ${r.seeds_count} benih. Gagal: ${r.error_count}`;
     $('osint-batch-results').innerHTML = r.results.map((x) => `
-      <div class="row">${esc(x.seed)}
+      <div class="row">${esc(x.seed)} <span class="why">${esc(x.sumber || '')}</span>
         <div class="${x.ok ? 'key' : 'why'}">${x.ok ? `${x.count} kandidat` : `Gagal: ${esc(x.error)}`}</div>
       </div>
     `).join('');
@@ -475,9 +562,25 @@ function init() {
   $('osint-import-btn').addEventListener('click', imporKandidat);
   $('load-example-btn').addEventListener('click', muatContoh);
   $('refresh-btn').addEventListener('click', muatEntri);
+  $('rapid-btn').addEventListener('click', tembakCepat);
+  $('sync-btn').addEventListener('click', sinkronPanitia);
+  $('sync-clear-btn').addEventListener('click', () => {
+    $('sync-input').value = '';
+    $('sync-status').textContent = '';
+    $('sync-results').innerHTML = '';
+    pesan('Kolom riwayat panitia dikosongkan.');
+  });
   $('rutinitas-refresh-btn').addEventListener('click', muatStatusRutinitas);
   $('status-filter').addEventListener('change', renderAntrean);
   $('restore-input').addEventListener('change', (e) => restore(e.target.files[0]));
+
+  document.addEventListener('keydown', (e) => {
+    if (!e.altKey || e.key.toLowerCase() !== 's' || e.ctrlKey || e.metaKey) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
+    e.preventDefault();
+    tembakCepat();
+  });
 
   $('queue-body').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
@@ -487,6 +590,7 @@ function init() {
     if (btn.dataset.action === 'status') aksiStatus(key, btn.dataset.target);
     if (btn.dataset.action === 'alasan') aksiAlasan(key);
     if (btn.dataset.action === 'cek') aksiCek(key);
+    if (btn.dataset.action === 'redirect') imporRedirect(key, btn.dataset.url);
   });
 
   $('bulk-input').addEventListener('keydown', (e) => {

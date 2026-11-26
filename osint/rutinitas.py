@@ -33,6 +33,8 @@ if str(ROOT) not in sys.path:
 
 from canonicalizer.rules import evaluate
 from osint.crtsh import collect_subdomains, adalah_placeholder
+from osint.precheck import klasifikasi_gagal, klasifikasi_precheck
+from osint.urlscan import collect_urls as kumpulkan_urlscan
 from web.app import USER_AGENT, WIB, SoloTracker
 
 
@@ -162,6 +164,7 @@ def _ambil_hidup_default(url: str, timeout: int):
         timeout=timeout,
         headers={"User-Agent": USER_AGENT},
         allow_redirects=False,
+        stream=True,
     )
 
 
@@ -174,10 +177,9 @@ def periksa_hidup(
     jeda: Optional[Callable[[float], None]] = None,
 ) -> List[dict]:
     """
-    Klasifikasi hidup/mati.
+    Klasifikasi pasif: hidup siap tembak, parkir/kosong, atau mati.
 
-    Status HTTP apa pun dihitung hidup. Hanya timeout, NXDOMAIN, dan kegagalan
-    koneksi yang dihitung mati.
+    Memakai satu GET ringan per entri, maksimal 32 KB, tanpa mengikuti redirect.
     """
     ambil_data = ambil or _ambil_hidup_default
     istirahat = jeda or time.sleep
@@ -196,24 +198,16 @@ def periksa_hidup(
 
         try:
             respons = ambil_data(target, timeout)
-            kode = getattr(respons, "status_code", None)
-            hasil.append({
-                "canonical_key": key,
-                "url": target,
-                "alive": True,
-                "label": f"Hidup (HTTP {kode})",
-                "http_code": kode,
-            })
+            klasifikasi = klasifikasi_precheck(
+                target, respons, canonical_key=key
+            )
+            tutup = getattr(respons, "close", None)
+            if tutup:
+                tutup()
+            hasil.append(klasifikasi)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
                 requests.exceptions.RequestException) as exc:
-            hasil.append({
-                "canonical_key": key,
-                "url": target,
-                "alive": False,
-                "label": "Mati / NXDOMAIN",
-                "http_code": None,
-                "detail": type(exc).__name__,
-            })
+            hasil.append(klasifikasi_gagal(target, exc, key))
 
     return hasil
 
@@ -280,6 +274,8 @@ def jalankan_siklus(
     fetcher: Optional[Callable[[str, int], object]] = None,
     sleeper: Optional[Callable[[float], None]] = None,
     alive_fetcher: Optional[Callable[[str, int], object]] = None,
+    sources: Iterable[str] = ("crtsh", "urlscan"),
+    urlscan_fetcher: Optional[Callable[[str, int], object]] = None,
     waktu: Optional[datetime] = None,
 ) -> Dict[str, object]:
     """Jalankan satu siklus penuh dan kembalikan ringkasan terstruktur."""
@@ -293,14 +289,46 @@ def jalankan_siklus(
 
     benih, catatan_benih = baca_benih(seeds_path, contoh_path)
     benih_dipakai, benih_placeholder = pilih_benih(benih)
-    panen = collect_subdomains(
-        benih_dipakai,
-        timeout=timeout,
-        retries=retries,
-        delay=delay,
-        fetcher=fetcher,
-        sleeper=sleeper,
-    )
+    daftar_sumber = tuple(sources)
+    kandidat = set()
+    hasil_panen: List[dict] = []
+    galat = 0
+
+    if "crtsh" in daftar_sumber:
+        panen_crtsh = collect_subdomains(
+            benih_dipakai,
+            timeout=timeout,
+            retries=retries,
+            delay=delay,
+            fetcher=fetcher,
+            sleeper=sleeper,
+        )
+        kandidat.update(panen_crtsh["candidates"])
+        hasil_panen.extend({**r, "sumber": "crt.sh"} for r in panen_crtsh["results"])
+        galat += panen_crtsh["error_count"]
+
+    if "urlscan" in daftar_sumber:
+        panen_urlscan = kumpulkan_urlscan(
+            benih_dipakai,
+            timeout=min(timeout, 6),
+            retries=min(retries, 1),
+            delay=delay,
+            fetcher=urlscan_fetcher,
+            sleeper=sleeper,
+            tolak_placeholder=True,
+        )
+        kandidat.update(panen_urlscan["candidates"])
+        hasil_panen.extend(
+            {**r, "sumber": "urlscan.io"} for r in panen_urlscan["results"]
+        )
+        galat += panen_urlscan["error_count"]
+
+    panen = {
+        "candidates": sorted(kandidat),
+        "total": len(kandidat),
+        "error_count": galat,
+        "results": hasil_panen,
+    }
 
     tracker = SoloTracker(penyimpanan_path)
     impor = impor_aman(tracker, panen["candidates"], waktu)
@@ -323,21 +351,24 @@ def jalankan_siklus(
             ambil=alive_fetcher,
             jeda=sleeper,
         )
+        tracker.catat_probe(hasil_hidup)
         if prune_dead:
             terhapus = buang_mati(tracker, hasil_hidup)
 
     backup_path = buat_backup(tracker, backup_dir, waktu)
 
-    hidup = sum(1 for h in hasil_hidup if h["alive"])
-    mati = len(hasil_hidup) - hidup
+    parkir = sum(1 for h in hasil_hidup if h.get("parking"))
+    hidup = sum(1 for h in hasil_hidup if h["alive"] and not h.get("parking"))
+    mati = sum(1 for h in hasil_hidup if not h["alive"])
 
     baris_log = " | ".join([
         f"benih={len(benih)} dipakai={len(benih_dipakai)} "
         f"placeholder={len(benih_placeholder)} sumber={seeds_path.name} "
-        f"kandidat={panen['total']} gagal_crtsh={panen['error_count']}",
+        f"kandidat={panen['total']} gagal_sumber={panen['error_count']} "
+        f"sumber_panen={','.join(daftar_sumber)}",
         f"masuk_siap_submit={impor['added']} "
         f"dilewati={impor['skipped_existing']} tidak_sah={impor['invalid']}",
-        f"hidup={hidup} mati={mati} dihapus={len(terhapus)}",
+        f"hidup={hidup} parkir={parkir} mati={mati} dihapus={len(terhapus)}",
         f"backup={backup_path.name}",
     ])
     if catatan_benih:
@@ -351,11 +382,11 @@ def jalankan_siklus(
     print(f"- Placeholder dilewati: {len(benih_placeholder)} (tanpa query crt.sh)")
     if benih_placeholder:
         print(f"- Daftar placeholder: {', '.join(benih_placeholder)}")
-    print(f"- Kandidat crt.sh: {panen['total']} (gagal: {panen['error_count']})")
+    print(f"- Kandidat ({'/'.join(daftar_sumber)}): {panen['total']} (gagal: {panen['error_count']})")
     print(f"- Masuk Siap Submit: {impor['added']}")
     print(f"- Dilewati (sudah ada): {impor['skipped_existing']}")
     print(f"- Tidak sah: {impor['invalid']}")
-    print(f"- Hidup / Mati: {hidup} / {mati}")
+    print(f"- Hidup / Parkir / Mati: {hidup} / {parkir} / {mati}")
     print(f"- Dihapus (prune): {len(terhapus)}")
     print(f"- Backup: {backup_path}")
     print(f"- Log: {log_path}")
@@ -371,12 +402,15 @@ def jalankan_siklus(
         "daftar_placeholder": benih_placeholder,
         "kandidat": panen["total"],
         "gagal_crtsh": panen["error_count"],
+        "gagal_sumber": panen["error_count"],
+        "sumber": list(daftar_sumber),
         "hasil_panen": panen["results"],
         "ditambah": impor["added"],
         "kunci_baru": impor["keys"],
         "dilewati": impor["skipped_existing"],
         "tidak_sah": impor["invalid"],
         "hidup": hidup,
+        "parkir": parkir,
         "mati": mati,
         "dihapus": len(terhapus),
         "kunci_dihapus": terhapus,
@@ -388,7 +422,14 @@ def jalankan_siklus(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Siklus otomatis OSINT pasif mode solo (crt.sh -> antrean -> backup)."
+        description=(
+            "Siklus otomatis OSINT pasif mode solo "
+            "(crt.sh + urlscan.io -> antrean -> backup)."
+        )
+    )
+    parser.add_argument(
+        "--sources", default="crtsh,urlscan",
+        help="Sumber penemuan pasif, dipisah koma (default: crtsh,urlscan).",
     )
     parser.add_argument("--seeds", default="data/seeds.txt", help="Berkas daftar benih.")
     parser.add_argument("--submissions", default="data/submissions.json", help="Berkas antrean.")
@@ -433,6 +474,10 @@ def main(argv=None) -> int:
         prune_dead=args.prune_dead,
         alive_timeout=max(1, args.alive_timeout),
         alive_delay=max(0.0, args.alive_delay),
+        sources=[
+            s.strip() for s in args.sources.split(",")
+            if s.strip() in ("crtsh", "urlscan")
+        ] or ["crtsh", "urlscan"],
     )
     return 0
 

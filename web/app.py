@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -37,6 +38,11 @@ from osint.crtsh import (
     collect_subdomains,
     fetch_subdomains as ambil_subdomain,
     siapkan_query,
+)
+from osint.precheck import klasifikasi_gagal, klasifikasi_precheck
+from osint.urlscan import (
+    collect_urls as kumpulkan_urlscan,
+    siapkan_query_urlscan,
 )
 
 DATA_FILE = ROOT / "data" / "submissions.json"
@@ -77,8 +83,19 @@ def _cache_tulis(kunci: str, nilai: dict, ttl: int) -> None:
             _CACHE_CRTSH.popitem(last=False)
 
 
-def now_wib() -> str:
-    return datetime.now(WIB).isoformat(timespec="seconds")
+def now_wib(timespec: str = "milliseconds") -> str:
+    """Waktu WIB dengan presisi default sampai milidetik."""
+    return datetime.now(WIB).isoformat(timespec=timespec)
+
+
+def peringkat_antrean(entry: dict) -> int:
+    """Hidup > belum dicek > parkir/mati."""
+    probe = entry.get("probe") or {}
+    if probe.get("parking") or probe.get("alive") is False:
+        return 2
+    if probe.get("alive") is True:
+        return 0
+    return 1
 
 
 class SoloTracker:
@@ -195,6 +212,50 @@ class SoloTracker:
         entry["score"] = 0
         self.save()
         return True, entry
+
+    def entries_urut(self) -> List[dict]:
+        """Antrean Siap Submit diurutkan berdasarkan hasil pre-check."""
+        return sorted(
+            self.entries.values(),
+            key=lambda e: (
+                peringkat_antrean(e),
+                str(e.get("created_at", "")),
+                e.get("canonical_key", ""),
+            ),
+            reverse=False,
+        )
+
+    def siap_urut(self) -> List[dict]:
+        return [
+            e for e in self.entries_urut()
+            if e.get("status") == "Siap Submit"
+        ]
+
+    def catat_probe(self, hasil: List[dict]) -> int:
+        """Simpan hasil pre-check ringan ke entri yang bersesuaian."""
+        tersimpan = 0
+        for item in hasil or []:
+            key = item.get("canonical_key", "")
+            if not key and item.get("url"):
+                r = evaluate(item["url"])
+                key = r.canonical_key if r.valid else ""
+            entri = self.entries.get(key)
+            if not entri:
+                continue
+            entri["probe"] = {
+                "alive": bool(item.get("alive")),
+                "parking": bool(item.get("parking")),
+                "label": item.get("label", ""),
+                "http_code": item.get("http_code"),
+                "title": item.get("title", "")[:120],
+                "redirect_target": item.get("redirect_target", ""),
+                "redirect_key": item.get("redirect_key", ""),
+                "checked_at": now_wib(),
+            }
+            tersimpan += 1
+        if tersimpan:
+            self.save()
+        return tersimpan
 
     def set_status(self, key: str, target: str, reason: str = "") -> Tuple[bool, str]:
         """Transisi status dengan aturan kunci panitia."""
@@ -319,16 +380,21 @@ class SoloTracker:
 
 def check_alive(urls: List[str]) -> List[dict]:
     """
+    Pre-check pasif, satu GET ringan per URL.
+
     Klasifikasi:
-      Hidup (HTTP <kode>)   -> DNS resolve & server membalas status apa pun.
-      Mati / NXDOMAIN       -> DNS gagal, connection refused, atau timeout.
+      Hidup (Siap Tembak)          -> merespons, bukan halaman parkir.
+      Terindikasi Parkir / Kosong  -> pola parkir pada title/body.
+      Mati / NXDOMAIN              -> DNS gagal, connection refused, timeout.
     """
-    results = []
+    results: List[dict] = []
     seen = set()
-    for item in urls:
+    for item in urls or []:
+        if isinstance(item, dict):
+            item = item.get("submit_url") or item.get("url") or ""
         if not isinstance(item, str) or not item.strip():
             continue
-        r = evaluate(item)
+        r = evaluate(item.strip())
         target = r.submit_url if r.valid else item.strip()
         if target in seen:
             continue
@@ -340,47 +406,60 @@ def check_alive(urls: List[str]) -> List[dict]:
                 timeout=4,
                 headers={"User-Agent": USER_AGENT},
                 allow_redirects=False,
+                stream=True,
             )
-            results.append({
-                "url": target,
-                "alive": True,
-                "label": f"Hidup (HTTP {resp.status_code})",
-                "http_code": resp.status_code,
-            })
+            hasil = klasifikasi_precheck(
+                target, resp, canonical_key=r.canonical_key if r.valid else ""
+            )
+            tutup = getattr(resp, "close", None)
+            if tutup:
+                tutup()
+            results.append(hasil)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
                 requests.exceptions.RequestException) as exc:
-            name = type(exc).__name__
-            results.append({
-                "url": target,
-                "alive": False,
-                "label": "Mati / NXDOMAIN",
-                "http_code": None,
-                "detail": name,
-            })
+            results.append(klasifikasi_gagal(
+                target, exc, r.canonical_key if r.valid else ""
+            ))
     return results
 
 
-# -- OSINT crt.sh -----------------------------------------------------------
+# -- Penemuan pasif (crt.sh + urlscan.io) -----------------------------------
 
-def fetch_subdomains(query: str) -> dict:
+def _gabungkan_kandidat(kumpulan) -> Dict[str, str]:
+    """Satukan kandidat lintas sumber memakai canonical_key."""
+    gabung: Dict[str, str] = {}
+    for kandidat in kumpulan:
+        if not isinstance(kandidat, str) or not kandidat.strip():
+            continue
+        r = evaluate(kandidat.strip())
+        if r.valid and r.canonical_key not in gabung:
+            gabung[r.canonical_key] = r.submit_url
+    return gabung
+
+
+def kumpulkan_riset(query: str, *, sources=None) -> dict:
     """
-    Cari crt.sh untuk satu input live.
+    Cari satu input live di crt.sh dan urlscan.io, lalu satukan kandidat unik.
 
-    Input dibedakan otomatis antara domain induk dan kata kunci, diproteksi
-    guardrail placeholder, memakai cache singkat, lalu tiap canonical_key
-    ditandai baru atau sudah ada di tracker.
+    Path aktif dari urlscan.io ikut dipertahankan canonicalizer. Cache singkat
+    menyimpan jawaban mentah; status Baru/Sudah Ada tetap dihitung ulang.
     """
     teks = (query or "").strip()
-    mode, query_crtsh, pesan_error = siapkan_query(
+    daftar_sumber = tuple(sources) if sources else ("crtsh", "urlscan")
+    mode, query_crtsh, err_crtsh = siapkan_query(teks, tolak_placeholder=True)
+    mode_urlscan, query_urlscan, err_urlscan = siapkan_query_urlscan(
         teks, tolak_placeholder=True
     )
     dasar = {
         "ok": False,
-        "error": pesan_error,
+        "error": err_crtsh or err_urlscan,
         "domain": teks,
         "query": teks,
         "mode": mode,
         "query_crtsh": query_crtsh,
+        "query_urlscan": query_urlscan,
+        "sumber": list(daftar_sumber),
+        "detail_sumber": [],
         "subdomains": [],
         "baru": [],
         "sudah_ada": [],
@@ -388,46 +467,80 @@ def fetch_subdomains(query: str) -> dict:
         "dari_cache": False,
         "cache_ttl_detik": CACHE_TTL,
     }
-    if not query_crtsh:
+    if not query_crtsh and not query_urlscan:
         return dasar
 
-    kunci = teks.lower().rstrip(".")
+    kunci = teks.lower().rstrip(".") + "|" + ",".join(sorted(daftar_sumber))
     temuan = _cache_baca(kunci)
     dari_cache = temuan is not None
     if dari_cache:
-        # Cache hanya menyimpan jawaban crt.sh. Status Baru/Sudah Ada tetap
-        # dihitung ulang supaya hasil impor langsung tercermin.
         hasil_mentah = temuan
     else:
-        hasil_mentah = ambil_subdomain(
-            teks,
-            timeout=8,
-            retries=1,
-            delay=0.2,
-            tolak_placeholder=True,
-        )
-        ttl_mentah = CACHE_TTL if hasil_mentah["ok"] else CACHE_TTL_GAGAL
-        _cache_tulis(kunci, {
-            "ok": hasil_mentah["ok"],
-            "error": hasil_mentah["error"],
-            "subdomains": hasil_mentah["subdomains"],
-        }, ttl_mentah)
+        gabung: Dict[str, str] = {}
+        detail_sumber: List[dict] = []
+        gagal: List[str] = []
+        berhasil = 0
+
+        if "crtsh" in daftar_sumber and query_crtsh:
+            h = ambil_subdomain(
+                teks, timeout=8, retries=1, delay=0.2, tolak_placeholder=True
+            )
+            gabung.update(_gabungkan_kandidat(h["subdomains"]))
+            detail_sumber.append({
+                "sumber": "crt.sh",
+                "ok": h["ok"],
+                "total": len(h["subdomains"]),
+                "error": h["error"],
+            })
+            if h["ok"]:
+                berhasil += 1
+            else:
+                gagal.append(f"crt.sh: {h['error']}")
+
+        if "urlscan" in daftar_sumber and query_urlscan:
+            h = kumpulkan_urlscan(
+                [teks],
+                timeout=6,
+                retries=1,
+                delay=0.2,
+                size=50,
+                tolak_placeholder=True,
+            )
+            gabung.update(_gabungkan_kandidat(h["candidates"]))
+            pesan_urlscan = "; ".join(
+                r["error"] for r in h["results"] if r.get("error")
+            )
+            detail_sumber.append({
+                "sumber": "urlscan.io",
+                "ok": h["ok"],
+                "total": h["total"],
+                "error": pesan_urlscan,
+            })
+            if h["ok"]:
+                berhasil += 1
+            else:
+                gagal.append("urlscan.io: " + pesan_urlscan)
+
+        hasil_mentah = {
+            "ok": berhasil > 0,
+            "error": " | ".join(gagal),
+            "subdomains": sorted(gabung),
+            "detail_sumber": detail_sumber,
+        }
+        ttl = CACHE_TTL if hasil_mentah["ok"] else CACHE_TTL_GAGAL
+        _cache_tulis(kunci, hasil_mentah, ttl)
 
     tracker = SoloTracker(DATA_FILE)
     detail: List[dict] = []
     baru: List[str] = []
     sudah: List[str] = []
-
     for key in hasil_mentah["subdomains"]:
         r = evaluate(key)
         ada = key in tracker.entries
-        penanda = (
-            "Sudah Ada di Tracker" if ada else "Baru (Siap Masuk Antrean)"
-        )
         detail.append({
             "canonical_key": key,
             "submit_url": r.submit_url if r.valid else "https://" + key,
-            "status": penanda,
+            "status": "Sudah Ada di Tracker" if ada else "Baru (Siap Masuk Antrean)",
         })
         (sudah if ada else baru).append(key)
 
@@ -437,14 +550,56 @@ def fetch_subdomains(query: str) -> dict:
         "error": hasil_mentah["error"],
         "domain": teks,
         "query": teks,
-        "mode": mode,
+        "mode": mode or mode_urlscan,
         "query_crtsh": query_crtsh,
+        "query_urlscan": query_urlscan,
+        "sumber": list(daftar_sumber),
+        "detail_sumber": hasil_mentah.get("detail_sumber", []),
         "subdomains": hasil_mentah["subdomains"],
         "baru": baru,
         "sudah_ada": sudah,
         "detail": detail,
         "dari_cache": dari_cache,
         "cache_ttl_detik": ttl,
+    }
+
+
+def fetch_subdomains(query: str) -> dict:
+    """Kompatibel dengan pemanggil lama: riset dua sumber."""
+    return kumpulkan_riset(query)
+
+
+def kumpulkan_riset_batch(seeds, *, sources=None) -> dict:
+    """Pemindaian banyak benih dengan kandidat unik lintas sumber."""
+    daftar_sumber = tuple(sources) if sources else ("crtsh", "urlscan")
+    gabung: Dict[str, str] = {}
+    hasil: List[dict] = []
+    gagal = 0
+
+    if "crtsh" in daftar_sumber:
+        h = collect_subdomains(
+            seeds, timeout=12, retries=2, delay=0.4, tolak_placeholder=True
+        )
+        gabung.update(_gabungkan_kandidat(h["candidates"]))
+        hasil.extend({**r, "sumber": "crt.sh"} for r in h["results"])
+        gagal += h["error_count"]
+
+    if "urlscan" in daftar_sumber:
+        h = kumpulkan_urlscan(
+            seeds, timeout=6, retries=1, delay=0.4, size=50, tolak_placeholder=True
+        )
+        gabung.update(_gabungkan_kandidat(h["candidates"]))
+        hasil.extend({**r, "sumber": "urlscan.io"} for r in h["results"])
+        gagal += h["error_count"]
+
+    return {
+        "ok": True,
+        "seeds_count": len([s for s in seeds if str(s).strip()]),
+        "results": hasil,
+        "candidates": sorted(gabung),
+        "total": len(gabung),
+        "error_count": gagal,
+        "sumber": list(daftar_sumber),
     }
 
 
@@ -484,6 +639,138 @@ def info_rutinitas() -> dict:
         "backup_terakhir": backup_terakhir.name if backup_terakhir else None,
         "backup_path": str(backup_terakhir) if backup_terakhir else None,
         "log_terakhir": log_terakhir,
+    }
+
+
+# -- Sinkronisasi massal hasil panitia --------------------------------------
+
+_URL_PANITIA = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
+_DOMAIN_PANITIA = re.compile(
+    r'(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:/[^\s,;)\]]*)?',
+    re.IGNORECASE,
+)
+_STATUS_PANITIA = (
+    (re.compile(r'\b(ditolak|rejected|reject|ditolak\s*admin|tidak\s*valid|non.?valid|tolak)\b', re.I), "Ditolak"),
+    (re.compile(r'\b(duplikat|duplicate|already\s*submitted)\b', re.I), "Duplikat"),
+    (re.compile(r'\b(valid|diterima|accepted|lolos|disetujui|\+1)\b', re.I), "Valid"),
+)
+
+
+def bersih_token(token: str) -> str:
+    """Bersihkan tanda baca ekor dari hasil ekstraksi baris dashboard."""
+    return token.strip().rstrip(".,;:!?)]}>\"'")
+
+
+def ekstrak_url_panitia(baris: str) -> List[str]:
+    """Ambil URL lengkap dan domain polos dari satu baris riwayat panitia."""
+    hasil: List[str] = []
+    terlihat = set()
+    for pola in (_URL_PANITIA, _DOMAIN_PANITIA):
+        for token in pola.findall(baris or ""):
+            value = bersih_token(token)
+            if not value or value in terlihat:
+                continue
+            terlihat.add(value)
+            hasil.append(value)
+    return hasil
+
+
+def deteksi_status_panitia(baris: str) -> str:
+    """Petakan kata kunci status pada baris riwayat ke status tracker."""
+    for pola, status in _STATUS_PANITIA:
+        if pola.search(baris or ""):
+            return status
+    return ""
+
+
+def alasan_panitia(baris: str) -> str:
+    """Ambil alasan singkat; jangan ikut menyimpan URL mentah bila bisa."""
+    cocok = re.search(
+        r'(?:alasan|reason|catatan|keterangan)\s*[:=]\s*(.+)',
+        baris or "",
+        re.IGNORECASE,
+    )
+    teks = cocok.group(1) if cocok else baris
+    teks = _URL_PANITIA.sub(" ", teks)
+    teks = _DOMAIN_PANITIA.sub(" ", teks)
+    return re.sub(r"\s+", " ", teks).strip(" -|·")[:500]
+
+
+def sinkron_panitia(tracker: SoloTracker, teks: str) -> dict:
+    """
+    Cocokkan baris riwayat panitia ke canonical_key lokal, lalu update massal.
+
+    Hanya transisi yang diizinkan mesin status yang dijalankan. Entri Valid dan
+    Duplikat tetap terkunci permanen.
+    """
+    baris_list = [b.strip() for b in str(teks or "").splitlines() if b.strip()]
+    rincian: List[dict] = []
+    dikenali = 0
+    cocok = 0
+    terupdate = 0
+    dilewati = 0
+    tidak_cocok = 0
+    gagal = 0
+
+    for baris in baris_list:
+        status = deteksi_status_panitia(baris)
+        if not status:
+            continue
+        dikenali += 1
+        alasan = alasan_panitia(baris)
+        kunci_baris = set()
+
+        for mentah in ekstrak_url_panitia(baris):
+            r = evaluate(mentah)
+            if not r.valid:
+                continue
+            key = r.canonical_key
+            if key in kunci_baris:
+                continue
+            kunci_baris.add(key)
+
+            entri = tracker.entries.get(key)
+            if not entri:
+                tidak_cocok += 1
+                rincian.append({
+                    "canonical_key": key, "status": status,
+                    "hasil": "Tidak cocok di tracker lokal",
+                })
+                continue
+            cocok += 1
+            if entri.get("status") == status:
+                dilewati += 1
+                rincian.append({
+                    "canonical_key": key, "status": status,
+                    "hasil": "Sudah sesuai",
+                })
+                continue
+
+            ok, err = tracker.set_status(key, status, alasan)
+            if ok:
+                terupdate += 1
+                rincian.append({
+                    "canonical_key": key, "status": status,
+                    "hasil": "Diperbarui",
+                })
+            else:
+                gagal += 1
+                rincian.append({
+                    "canonical_key": key, "status": status,
+                    "hasil": err or "Transisi ditolak",
+                })
+
+    return {
+        "ok": True,
+        "total_baris": len(baris_list),
+        "baris_dikenali": dikenali,
+        "cocok": cocok,
+        "terupdate": terupdate,
+        "dilewati": dilewati,
+        "tidak_cocok": tidak_cocok,
+        "gagal": gagal,
+        "rincian": rincian,
+        "summary": tracker.summary(),
     }
 
 
@@ -543,12 +830,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/stats":
             return self._json(self.tracker.summary())
         if path == "/api/entries":
-            entries = sorted(
-                self.tracker.entries.values(),
-                key=lambda e: e.get("created_at", ""),
-                reverse=True,
-            )
-            return self._json({"entries": entries})
+            return self._json({"entries": self.tracker.entries_urut()})
 
         if path == "/api/export/json":
             return self._download(
@@ -583,7 +865,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/subdomains":
             qs = parse_qs(parsed.query)
             domain = (qs.get("q") or qs.get("domain") or [""])[0]
-            hasil = fetch_subdomains(domain)
+            sumber = [
+                s.strip() for s in (qs.get("sources") or ["crtsh,urlscan"])[0].split(",")
+                if s.strip() in ("crtsh", "urlscan")
+            ] or ["crtsh", "urlscan"]
+            hasil = fetch_subdomains(domain) if len(sumber) == 2 else kumpulkan_riset(domain, sources=sumber)
             # Error disampaikan sebagai field, bukan HTTP 500, supaya antarmuka
             # bisa menampilkan pesan yang jelas tanpa memutus alur kerja.
             return self._json(hasil)
@@ -625,19 +911,23 @@ class Handler(SimpleHTTPRequestHandler):
                 urls = data.get("urls", [])
                 if not isinstance(urls, list):
                     urls = [u for u in data.get("canonical_keys", [])]
-                return self._json({"results": check_alive(urls)})
+                hasil = check_alive(urls)
+                self.tracker.catat_probe(hasil)
+                return self._json({"results": hasil})
+
+            if path == "/api/sync-panitia":
+                data = self._json_body()
+                return self._json(sinkron_panitia(self.tracker, data.get("text", "")))
 
             if path == "/api/osint/scan":
                 data = self._json_body()
                 seeds = data.get("seeds", [])
                 if not isinstance(seeds, list):
                     return self._json({"error": "seeds harus berupa daftar teks"}, 400)
-                hasil = collect_subdomains(
-                    seeds,
-                    timeout=batas(data.get("timeout"), 12, 1, 30),
-                    retries=batas(data.get("retries"), 2, 0, 4),
-                    delay=max(0.0, min(5.0, float(data.get("delay", 0.4) or 0.4))),
-                )
+                sumber = data.get("sources") or ("crtsh", "urlscan")
+                if not isinstance(sumber, list):
+                    return self._json({"error": "sources harus berupa daftar teks"}, 400)
+                hasil = kumpulkan_riset_batch(seeds, sources=sumber)
                 return self._json(hasil)
 
             if path == "/api/osint/import":
